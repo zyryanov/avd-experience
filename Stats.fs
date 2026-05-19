@@ -81,7 +81,7 @@ let intervalReportContrib (closedKind: IntervalKind) (reason: ConnectReason opti
     let fiveMin    = TimeSpan.FromMinutes 5.0
     let fifteenMin = TimeSpan.FromMinutes 15.0
     match closedKind with
-    | Connecting -> dur + (match reason with Some Initial -> fiveMin | _ -> TimeSpan.Zero)
+    | Connecting -> dur + match reason with Some Initial -> fiveMin | _ -> TimeSpan.Zero
     | Issue      -> dur
     | Active     -> match reason with Some PostIssue -> min fifteenMin dur | _ -> TimeSpan.Zero
     | Paused     -> TimeSpan.Zero
@@ -91,8 +91,8 @@ let splitByDay (interval: Interval) : (DateOnly * TimeSpan) list =
     let rec go current acc =
         if current >= interval.End then List.rev acc
         else
-            let date = DateOnly.FromDateTime(current.LocalDateTime)
-            let nextMidnight = DateTimeOffset(current.LocalDateTime.Date.AddDays(1.0), current.Offset)
+            let date = DateOnly.FromDateTime current.LocalDateTime
+            let nextMidnight = DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(current.LocalDateTime.Date.AddDays 1.0))
             let segEnd = min nextMidnight interval.End
             go segEnd ((date, segEnd - current) :: acc)
     go interval.Start []
@@ -206,7 +206,7 @@ let computeWithTrace (initState: (IntervalKind * DateTimeOffset) option) (initLo
         let dayReportTime date =
             eventTraces
             |> List.sumBy (fun t ->
-                if DateOnly.FromDateTime(t.Event.TimeCreated.LocalDateTime) = date
+                if DateOnly.FromDateTime t.Event.TimeCreated.LocalDateTime = date
                 then t.ReportContribution.TotalSeconds
                 else 0.0)
             |> TimeSpan.FromSeconds
