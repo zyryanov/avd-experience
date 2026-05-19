@@ -53,12 +53,11 @@ let private softQuery label result =
         AnsiConsole.MarkupLine(sprintf "[yellow]⚠ Warning:[/] could not read %s events ([dim]%s[/])" (Markup.Escape label) (Markup.Escape (sprintf "%A" e)))
         []
 
-let private bootstrapState () : (IntervalKind * DateTimeOffset) option * bool =
-    let now = DateTimeOffset.Now
-    let from = now.AddHours(-24.0)
-    let rdp  = match queryByTimeRange channel [] from now with Ok evs -> evs | Error _ -> []
-    let sys  = match querySystemPowerEvents from now        with Ok evs -> evs | Error _ -> []
-    let sec  = match queryLockEvents from now               with Ok evs -> evs | Error _ -> []
+let private deriveStateAt (at: DateTimeOffset) : (IntervalKind * DateTimeOffset) option * bool =
+    let from = at.AddHours(-24.0)
+    let rdp  = match queryByTimeRange channel [] from at with Ok evs -> evs | Error _ -> []
+    let sys  = match querySystemPowerEvents from at       with Ok evs -> evs | Error _ -> []
+    let sec  = match queryLockEvents from at              with Ok evs -> evs | Error _ -> []
     let events = rdp @ sys @ sec |> List.sortBy (fun e -> e.TimeCreated)
     events |> List.fold
         (fun (st, lk) e ->
@@ -69,7 +68,7 @@ let private bootstrapState () : (IntervalKind * DateTimeOffset) option * bool =
 
 let private runMonitor () : int =
     let lockObj = obj()
-    let initState, initLocked = bootstrapState()
+    let initState, initLocked = deriveStateAt DateTimeOffset.Now
     let state = ref initState
     let wsLocked = ref initLocked
     let connectReason : ConnectReason option ref = ref None
@@ -134,7 +133,9 @@ let private run (from: DateTimeOffset) (until: DateTimeOffset) (writeCsv: bool) 
             @ softQuery "Security lock" (queryLockEvents from until)
             |> List.sortBy (fun e -> e.TimeCreated)
         AnsiConsole.MarkupLine(sprintf "[dim]Found %d events[/] [grey](%s → %s)[/]" events.Length (fmt from) (fmt until))
-        let stats, trace = computeWithTrace until events
+        let initState, initLocked = deriveStateAt from
+        let initStateClamped = initState |> Option.map (fun (kind, t) -> kind, max t from)
+        let stats, trace = computeWithTrace initStateClamped initLocked until events
         if writeCsv then
             let eventsPath = nextAvailablePath baseName ".csv"
             let unknownIds = writeEventsCsv eventsPath trace.EventTraces

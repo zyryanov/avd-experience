@@ -145,7 +145,7 @@ let stepState
     | _ ->
         state, None
 
-let private buildIntervalsWithTrace (periodEnd: DateTimeOffset) (events: LogEvent list) : Interval list * EventTrace list =
+let private buildIntervalsWithTrace (initState: (IntervalKind * DateTimeOffset) option) (initLocked: bool) (periodEnd: DateTimeOffset) (events: LogEvent list) : Interval list * EventTrace list =
     let effectiveEnd = min periodEnd DateTimeOffset.Now
 
     let trace stateBefore stateAfter closed contribution (e: LogEvent) =
@@ -175,16 +175,16 @@ let private buildIntervalsWithTrace (periodEnd: DateTimeOffset) (events: LogEven
             let acc' = match closed with Some iv -> iv :: acc | None -> acc
             walk newState reason' locked' acc' (trace state newState closed contribution e :: traces) rest
 
-    walk None None false [] [] events
+    walk initState None initLocked [] [] events
 
-let computeWithTrace (periodEnd: DateTimeOffset) (events: LogEvent list) : PeriodStats * TraceResult =
+let computeWithTrace (initState: (IntervalKind * DateTimeOffset) option) (initLocked: bool) (periodEnd: DateTimeOffset) (events: LogEvent list) : PeriodStats * TraceResult =
     if events.IsEmpty then
         let empty = { ByDay = []; TotalActive = TimeSpan.Zero; TotalConnecting = TimeSpan.Zero; TotalPaused = TimeSpan.Zero; TotalIssue = TimeSpan.Zero; TotalIssueCount = 0; TotalReport = TimeSpan.Zero }
         let emptyTrace = { Intervals = []; EventTraces = []; IntervalSlices = [] }
         empty, emptyTrace
     else
         let events = events |> List.sortBy (fun e -> e.TimeCreated)
-        let intervals, eventTraces = buildIntervalsWithTrace periodEnd events
+        let intervals, eventTraces = buildIntervalsWithTrace initState initLocked periodEnd events
 
         let slices =
             intervals
