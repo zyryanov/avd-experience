@@ -129,7 +129,7 @@ Windows Event Log channels relevant to AVD:
 - `System` (power events: sleep 42, resume 107, shutdown 1074/6006/6008)
 - `Security` (workstation lock/unlock: 4800/4801; requires admin)
 
-## Build & Run
+## Build, Test & Run
 
 ```bash
 dotnet build
@@ -137,4 +137,5 @@ dotnet run
 dotnet run -- --start 2026-05-01 --end 2026-05-18
 dotnet run -- --monitor
 dotnet run -- --csv
+dotnet test avd-experience.Tests
 ```

@@ -22,6 +22,9 @@ jobs:
         with:
           dotnet-version: '10.x'
 
+      - name: Test
+        run: dotnet test avd-experience.Tests
+
       - name: Publish
         run: |
           $version = "${{ github.ref_name }}".TrimStart('v')

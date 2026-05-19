@@ -18,8 +18,13 @@ Run it: the tool will self-relaunch elevated via UAC if not running as admin.
 Requires .NET 10 SDK.
 
 ```bash
-dotnet build
 dotnet run -- [options]
+```
+
+### Testing
+
+```bash
+dotnet test avd-experience.Tests
 ```
 
 ## CLI Options
