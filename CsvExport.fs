@@ -5,6 +5,7 @@ open System.IO
 open AvdStats.EventLog
 open AvdStats.Events
 open AvdStats.Stats
+open AvdStats.SysInfo
 open AvdStats.PerfMonitor
 
 let private escape (s: string) =
@@ -96,10 +97,24 @@ let writeIntervalsCsv (path: string) (slices: IntervalSlice list) (traces: Event
             |> String.concat ","
         writer.WriteLine row
 
+let writeSpecsTxt (path: string) (spec: SystemSpec) : unit =
+    use writer = new StreamWriter(path, append = false, encoding = Text.Encoding.UTF8)
+    writer.WriteLine(sprintf "Machine,%s" spec.MachineName)
+    writer.WriteLine(sprintf "OS,%s" spec.OsDescription)
+    writer.WriteLine(sprintf "CPU,%s" spec.CpuModel)
+    writer.WriteLine(sprintf "LogicalCPUs,%d" spec.LogicalCpus)
+    writer.WriteLine(sprintf "TotalRAM,%s" (formatBytes (float spec.TotalRamBytes)))
+    writer.WriteLine(sprintf "AvailableRAM,%s" (formatBytes (float spec.AvailRamBytes)))
+    for d in spec.Disks do
+        writer.WriteLine(sprintf "Disk %s,%s free of %s" d.Name (formatBytes (float d.FreeBytes)) (formatBytes (float d.TotalBytes)))
+    writer.WriteLine(sprintf "Timestamp,%s" (DateTimeOffset.Now.ToString "o"))
+
 let writePerfCsv (path: string) (samples: PerfSample list) : unit =
     use writer = new StreamWriter(path, append = false, encoding = Text.Encoding.UTF8)
-    writer.WriteLine "Timestamp,CpuPct,RamPct,RamUsedMB,DiskPct"
+    writer.WriteLine "Timestamp,CpuPct,RamPct,RamUsedMB,DiskPct,DiskReadBps,DiskWriteBps,NetSentBps,NetRecvBps,RttMs,OutputFps,EncodingTimeMs,FrameQuality,FramesSkippedSec,LossRate"
     for s in samples do
         writer.WriteLine(
-            sprintf "%s,%.2f,%.2f,%.1f,%.2f"
-                (s.Time.ToString "o") s.CpuPct s.RamPct s.RamUsedMB s.DiskPct)
+            sprintf "%s,%.2f,%.2f,%.1f,%.2f,%.2f,%.2f,%.2f,%.2f,%.1f,%.2f,%.1f,%.1f,%.2f,%.2f"
+                (s.Time.ToString "o") s.CpuPct s.RamPct s.RamUsedMB s.DiskPct
+                s.DiskReadBps s.DiskWriteBps s.NetSentBps s.NetRecvBps
+                s.RttMs s.OutputFps s.EncodingTimeMs s.FrameQuality s.FramesSkippedSec s.LossRate)
