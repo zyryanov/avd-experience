@@ -1,0 +1,31 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.x'
+
+      - name: Publish
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          dotnet publish -c Release -p:Version=$version -o publish/
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: publish/avd-experience.exe
+          generate_release_notes: true
