@@ -35,7 +35,9 @@ dotnet test AvdExperience.IntegrationTests
 | `--start` | `-s`, `--from` | today | Start date, inclusive (`yyyy-MM-dd`) |
 | `--end` | `-t`, `--to` | today | End date, inclusive (`yyyy-MM-dd`) |
 | `--monitor` | `-m` | — | Watch live event log; print each state transition with timestamp and duration |
-| `--csv` | `-c` | off | Export raw events and intervals to CSV files |
+| `--csv` | `-c` | off | Export to CSV — events+intervals, or perf samples when paired with `--perf` |
+| `--specs` | `-i` | — | Print the host hardware spec (CPU, RAM, disks) and exit |
+| `--perf` | `-p` | — | Live mode: sample whole-VM CPU/RAM/Disk usage and plot it; pair with `--csv` to dump samples |
 
 ## What It Reports
 
@@ -60,17 +62,37 @@ Primarily for debugging. Produces two files:
 - `avd-events-<from>--<to>.csv` — every relevant event with state machine context
 - `avd-events-<from>--<to>-intervals.csv` — typed intervals with durations
 
+With `--perf --csv`: `avd-perf-<timestamp>.csv` — one row per sample
+(`Timestamp,CpuPct,RamPct,RamUsedMB,DiskPct`).
+
+## Resource Performance (`--specs` / `--perf`)
+
+Separate from the event-log analysis: these read the **host's own hardware and
+performance counters**, so run them *inside the AVD session host*.
+
+- `--specs` — one-shot hardware inventory: CPU, logical CPU count, total/available
+  RAM, fixed disks.
+- `--perf` — samples CPU / RAM / Disk every 2 s and renders a live table with
+  current / average / peak values and a sparkline trend. Ctrl+C to stop.
+
+> **Note:** `--perf` counters are Windows `_Total` instances — they measure the
+> **whole VM** across all sessions, not just your user session. On a multi-session
+> host the numbers reflect everyone on the box. Disk/CPU counters need admin or
+> "Performance Monitor Users" membership (the tool already self-elevates via UAC).
+
 ## Architecture
 
-Seven F# modules in dependency order:
+F# modules in dependency order:
 
 ```
 Elevation.fs     — UAC self-relaunch
 EventLog.fs      — Windows Event Log I/O (XPath queries)
 Events.fs        — Event ID classifiers and domain knowledge
-CsvExport.fs     — Write events/intervals to CSV
 Stats.fs         — State machine: raw events → typed intervals → DayStats/PeriodStats
-Report.fs        — Format PeriodStats for console
+SysInfo.fs       — Static hardware spec (CPU/RAM/disks)
+PerfMonitor.fs   — Live CPU/RAM/Disk perf-counter sampling
+CsvExport.fs     — Write events/intervals/perf samples to CSV
+Report.fs        — Format PeriodStats, spec table, and live usage for console
 Program.fs       — CLI arg parsing (Argu), pipeline orchestration
 ```
 

@@ -5,6 +5,7 @@ open System.IO
 open AvdStats.EventLog
 open AvdStats.Events
 open AvdStats.Stats
+open AvdStats.PerfMonitor
 
 let private escape (s: string) =
     if s.Contains ',' || s.Contains '"' || s.Contains '\n' then
@@ -94,3 +95,11 @@ let writeIntervalsCsv (path: string) (slices: IntervalSlice list) (traces: Event
             |> List.map escape
             |> String.concat ","
         writer.WriteLine row
+
+let writePerfCsv (path: string) (samples: PerfSample list) : unit =
+    use writer = new StreamWriter(path, append = false, encoding = Text.Encoding.UTF8)
+    writer.WriteLine "Timestamp,CpuPct,RamPct,RamUsedMB,DiskPct"
+    for s in samples do
+        writer.WriteLine(
+            sprintf "%s,%.2f,%.2f,%.1f,%.2f"
+                (s.Time.ToString "o") s.CpuPct s.RamPct s.RamUsedMB s.DiskPct)
