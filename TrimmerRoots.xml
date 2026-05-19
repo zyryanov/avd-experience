@@ -1,0 +1,4 @@
+<linker>
+  <assembly fullname="avd-experience" preserve="all" />
+  <assembly fullname="Argu" preserve="all" />
+</linker>

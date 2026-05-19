@@ -177,6 +177,7 @@ let private runParsed (argv: string[]) =
 
 [<EntryPoint>]
 let main argv =
+    Console.OutputEncoding <- Text.Encoding.UTF8
     if isElevated () then
         let cleanArgv = tryRedirectOutput argv
         runParsed cleanArgv
