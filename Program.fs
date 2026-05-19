@@ -7,6 +7,8 @@ open AvdStats.EventLog
 open AvdStats.Events
 open AvdStats.CsvExport
 open AvdStats.Stats
+open AvdStats.SysInfo
+open AvdStats.PerfMonitor
 open AvdStats.Report
 
 type Args =
@@ -14,13 +16,17 @@ type Args =
     | [<AltCommandLine("-t", "--to")>]   End of string
     | [<AltCommandLine("-m")>] Monitor
     | [<AltCommandLine("-c")>] Csv
+    | [<AltCommandLine("-i")>] Specs
+    | [<AltCommandLine("-p")>] Perf
     interface IArgParserTemplate with
         member x.Usage =
             match x with
             | Start _ -> "start date, inclusive (yyyy-MM-dd); alias --from / -s. Default: start of today."
             | End _   -> "end date, inclusive (yyyy-MM-dd); alias --to / -t. Default: end of today."
             | Monitor -> "watch live event log for AVD state changes; prints each transition with timestamp and duration"
-            | Csv     -> "export events and intervals to CSV files (off by default)"
+            | Csv     -> "export to CSV files (events+intervals, or perf samples with --perf); off by default"
+            | Specs   -> "print the host hardware spec (CPU, RAM, disks) and exit"
+            | Perf    -> "live mode: sample whole-VM CPU/RAM/Disk usage and plot it; pair with --csv to also dump samples"
 
 let private fmt (d: DateTimeOffset) = d.ToString "yyyy-MM-dd"
 
@@ -153,6 +159,48 @@ let private run (from: DateTimeOffset) (until: DateTimeOffset) (writeCsv: bool) 
         printStats stats
         0
 
+let private perfIntervalMs = 2000
+let private perfWindow = 60
+
+let private runSpecs () : int =
+    printSpecs (collect ())
+    0
+
+let private runPerf (writeCsv: bool) : int =
+    let spec = collect ()
+    printSpecs spec
+    match createCounters () with
+    | Error msg ->
+        AnsiConsole.MarkupLine(sprintf "[red bold]✗ Cannot read performance counters:[/] %s" (Markup.Escape msg))
+        AnsiConsole.MarkupLine "[dim]Disk/CPU counters need admin or 'Performance Monitor Users' membership.[/]"
+        1
+    | Ok counters ->
+        let totalRamMB = float spec.TotalRamBytes / 1048576.0
+        let all = ResizeArray<PerfSample>()
+        use stop = new Threading.ManualResetEventSlim(false)
+        Console.CancelKeyPress.Add(fun e ->
+            e.Cancel <- true
+            stop.Set())
+        sample counters totalRamMB |> ignore   // discard first — NextValue() warms up at 0.0
+        AnsiConsole.MarkupLine "[dim italic]Sampling every 2s… (Ctrl+C to stop)[/]"
+        AnsiConsole.Live(perfRenderable []).Start(fun ctx ->
+            while not stop.IsSet do
+                let s = sample counters totalRamMB
+                all.Add s
+                let window =
+                    let n = all.Count
+                    if n > perfWindow then List.ofSeq (Seq.skip (n - perfWindow) all)
+                    else List.ofSeq all
+                ctx.UpdateTarget(perfRenderable window)
+                ctx.Refresh()
+                stop.Wait perfIntervalMs |> ignore)
+        dispose counters
+        if writeCsv && all.Count > 0 then
+            let path = nextAvailablePath (sprintf "avd-perf-%s" (DateTime.Now.ToString "yyyyMMdd-HHmmss")) ".csv"
+            writePerfCsv path (List.ofSeq all)
+            AnsiConsole.MarkupLine(sprintf "[green]✓ Perf CSV:[/] %s" (Markup.Escape path))
+        0
+
 let private runParsed (argv: string[]) =
     let parser = ArgumentParser.Create<Args>(programName = "avd-experience")
     let parsed =
@@ -163,6 +211,8 @@ let private runParsed (argv: string[]) =
     match parsed with
     | Error code -> code
     | Ok args when args.Contains Monitor -> runMonitor ()
+    | Ok args when args.Contains Specs -> runSpecs ()
+    | Ok args when args.Contains Perf -> runPerf (args.Contains Csv)
     | Ok args ->
         let from =
             match args.TryGetResult Start with

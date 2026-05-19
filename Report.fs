@@ -3,6 +3,8 @@ module AvdStats.Report
 open System
 open Spectre.Console
 open AvdStats.Stats
+open AvdStats.SysInfo
+open AvdStats.PerfMonitor
 
 let fmtTime (ts: TimeSpan) = sprintf "%dh %02dm" (int ts.TotalHours) ts.Minutes
 
@@ -87,3 +89,51 @@ let printStats (stats: PeriodStats) =
 
     AnsiConsole.WriteLine()
     AnsiConsole.Write(table)
+
+// ── system spec + live resource usage ───────────────────────────────────────
+
+let printSpecs (spec: SystemSpec) =
+    let table = Table()
+    table.Border <- TableBorder.Rounded
+    table.Title <- TableTitle("[bold white]System Spec[/]")
+    table.AddColumn(TableColumn("[bold]Component[/]").LeftAligned()) |> ignore
+    table.AddColumn(TableColumn("[bold]Value[/]").LeftAligned())     |> ignore
+    let row (k: string) (v: string) = table.AddRow(Markup.Escape k, Markup.Escape v) |> ignore
+    row "Machine"       spec.MachineName
+    row "OS"            spec.OsDescription
+    row "CPU"           spec.CpuModel
+    row "Logical CPUs"  (string spec.LogicalCpus)
+    row "RAM total"     (formatBytes (float spec.TotalRamBytes))
+    row "RAM available" (formatBytes (float spec.AvailRamBytes))
+    for d in spec.Disks do
+        row (sprintf "Disk %s" d.Name)
+            (sprintf "%s free of %s" (formatBytes (float d.FreeBytes)) (formatBytes (float d.TotalBytes)))
+    AnsiConsole.WriteLine()
+    AnsiConsole.Write(table)
+
+/// Build the live resource-usage table from a rolling window of samples.
+let perfRenderable (samples: PerfSample list) : Table =
+    let table = Table()
+    table.Border <- TableBorder.Rounded
+    table.Title <- TableTitle("[bold white]Live Resource Usage[/] [dim](whole-VM _Total — Ctrl+C to stop)[/]")
+    table.AddColumn(TableColumn("[bold]Metric[/]").LeftAligned())  |> ignore
+    table.AddColumn(TableColumn("[bold]Now[/]").RightAligned())    |> ignore
+    table.AddColumn(TableColumn("[bold]Avg[/]").RightAligned())    |> ignore
+    table.AddColumn(TableColumn("[bold]Peak[/]").RightAligned())   |> ignore
+    table.AddColumn(TableColumn("[bold]Trend[/]").LeftAligned())   |> ignore
+    let last = List.tryLast samples
+    let metric (name: string) (color: string) (field: PerfSample -> float) =
+        let now   = last |> Option.map field |> Option.defaultValue 0.0
+        let avg   = average field samples
+        let pk    = peak field samples
+        let spark = samples |> List.map field |> sparkline
+        table.AddRow(
+            sprintf "[%s]%s[/]" color name,
+            sprintf "[%s]%.1f%%[/]" color now,
+            sprintf "%.1f%%" avg,
+            sprintf "%.1f%%" pk,
+            sprintf "[%s]%s[/]" color (Markup.Escape spark)) |> ignore
+    metric "CPU"  "green"      (fun s -> s.CpuPct)
+    metric "RAM"  "yellow"     (fun s -> s.RamPct)
+    metric "Disk" "steelblue1" (fun s -> s.DiskPct)
+    table

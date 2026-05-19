@@ -12,6 +12,7 @@ CLI app reads Windows Event logs, analyzes Azure AVD session records:
 - Windows Event Log API (`System.Diagnostics.Eventing.Reader`)
 - Argu — CLI argument parsing
 - Spectre.Console — colored table and ANSI markup output
+- `System.Diagnostics.PerformanceCounter` — live CPU/RAM/Disk sampling (`--perf`)
 - Target: `net10.0`, single exe
 
 ## Workflow
@@ -39,7 +40,14 @@ Stats.fs      — State machine: stepState (unlocked path) + shadowStep (AVD eve
                 advanceState (routes by locked/unlock/normal); nextConnectReason tracks ConnectReason
                 across transitions; intervalReportContrib computes disruption cost per closed interval;
                 computeWithTrace aggregates into DayStats/PeriodStats and splits intervals by day via splitByDay
+SysInfo.fs    — Static hardware spec (collect → SystemSpec): CPU (PROCESSOR_IDENTIFIER env),
+                logical CPU count, RAM via P/Invoke GlobalMemoryStatusEx, fixed disks via
+                DriveInfo; pure helpers formatBytes / ramUsedPct / diskUsedPct
+PerfMonitor.fs— Live resource sampling; createCounters builds whole-VM "_Total"
+                PerformanceCounters (CPU/RAM/Disk), sample → PerfSample; pure helpers
+                sparkBar / sparkline / pushSample / average / peak
 Report.fs     — Spectre.Console colored table (printStats); state-change trace log (printTrace);
+                printSpecs (spec table); perfRenderable (live usage table w/ sparklines);
                 format helpers (fmtTime, formatDuration, stateMarkup, stateColor)
 Program.fs    — CLI arg parsing (Argu); runMonitor for live event subscription (bootstrapState
                 seeds initial state from last 24h); run for historical range query + optional CSV
@@ -105,8 +113,14 @@ Aggregated into `ReportTime` per day and `TotalReport` for the period.
 --start / -s / --from  <yyyy-MM-dd>   start date inclusive (default: today)
 --end   / -t / --to    <yyyy-MM-dd>   end date inclusive   (default: today)
 --monitor / -m                        live mode: watch event log, print each transition
---csv   / -c                          export events and intervals to CSV files
+--csv   / -c                          export to CSV (events+intervals; or perf samples with --perf)
+--specs / -i                          print host hardware spec (CPU/RAM/disks) and exit
+--perf  / -p                          live mode: sample whole-VM CPU/RAM/Disk usage, plot it
 ```
+
+`--specs` / `--perf` are a separate data path from the event-log analysis: they read the
+host's own hardware + perf counters (run *inside* the AVD session host), not RDP logs.
+`--perf` counters are `_Total` instances — whole-VM, not per-session.
 
 ## Conventions
 
@@ -139,6 +153,9 @@ dotnet run
 dotnet run -- --start 2026-05-01 --end 2026-05-18
 dotnet run -- --monitor
 dotnet run -- --csv
+dotnet run -- --specs
+dotnet run -- --perf
+dotnet run -- --perf --csv
 dotnet test AvdExperience.UnitTests
 dotnet test AvdExperience.IntegrationTests
 dotnet publish -p:PublishProfile=win-x64
