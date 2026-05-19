@@ -20,4 +20,4 @@ jobs:
           dotnet-version: '10.x'
 
       - name: Test
-        run: dotnet test AvdExperience.Tests
+        run: dotnet test AvdExperience.UnitTests

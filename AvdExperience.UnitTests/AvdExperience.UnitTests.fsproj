@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <RootNamespace>AvdStats.Tests</RootNamespace>
+    <RootNamespace>AvdStats.UnitTests</RootNamespace>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 
@@ -14,7 +14,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\avd-experience.fsproj" />
+    <ProjectReference Include="..\AvdExperience.fsproj" />
   </ItemGroup>
 
   <ItemGroup>
