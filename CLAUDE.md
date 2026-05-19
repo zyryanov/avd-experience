@@ -138,4 +138,5 @@ dotnet run -- --start 2026-05-01 --end 2026-05-18
 dotnet run -- --monitor
 dotnet run -- --csv
 dotnet test AvdExperience.UnitTests
+dotnet test AvdExperience.IntegrationTests
 ```

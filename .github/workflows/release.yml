@@ -26,6 +26,9 @@ jobs:
       - name: Test
         run: dotnet test AvdExperience.UnitTests
 
+      - name: Integration Test
+        run: dotnet test AvdExperience.IntegrationTests
+
       - name: Publish
         run: |
           $version = "${{ github.ref_name }}".TrimStart('v')
