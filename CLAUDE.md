@@ -12,7 +12,7 @@ CLI app reads Windows Event logs, analyzes Azure AVD session records:
 - Windows Event Log API (`System.Diagnostics.Eventing.Reader`)
 - Argu — CLI argument parsing
 - Spectre.Console — colored table and ANSI markup output
-- `System.Diagnostics.PerformanceCounter` — live CPU/RAM/Disk sampling (`--perf`)
+- `System.Diagnostics.PerformanceCounter` — live CPU/RAM/Disk/Network sampling (`--perf`)
 - Target: `net10.0`, single exe
 
 ## Workflow
@@ -44,8 +44,13 @@ SysInfo.fs    — Static hardware spec (collect → SystemSpec): CPU (PROCESSOR_
                 logical CPU count, RAM via P/Invoke GlobalMemoryStatusEx, fixed disks via
                 DriveInfo; pure helpers formatBytes / ramUsedPct / diskUsedPct
 PerfMonitor.fs— Live resource sampling; createCounters builds whole-VM "_Total"
-                PerformanceCounters (CPU/RAM/Disk), sample → PerfSample; pure helpers
-                sparkBar / sparkline / pushSample / average / peak
+                PerformanceCounters (CPU/RAM/Disk/DiskRead/DiskWrite) + per-instance
+                Network Interface counters (Bytes Sent|Received/sec, summed across
+                all NICs) + optional RemoteFX RDP counters (RTT, FPS, encoding time,
+                frame quality, frames skipped, loss rate — per-session instances,
+                auto-discovered via tryCreateRdpCounters); sample → PerfSample;
+                pure helpers sparkBar / sparkBarScaled / sparkline / sparklineScaled /
+                pushSample / average / peak
 Report.fs     — Spectre.Console colored table (printStats); state-change trace log (printTrace);
                 printSpecs (spec table); perfRenderable (live usage table w/ sparklines);
                 format helpers (fmtTime, formatDuration, stateMarkup, stateColor)
@@ -115,7 +120,8 @@ Aggregated into `ReportTime` per day and `TotalReport` for the period.
 --monitor / -m                        live mode: watch event log, print each transition
 --csv   / -c                          export to CSV (events+intervals; or perf samples with --perf)
 --specs / -i                          print host hardware spec (CPU/RAM/disks) and exit
---perf  / -p                          live mode: sample whole-VM CPU/RAM/Disk usage, plot it
+--perf  / -p                          live mode: sample whole-VM CPU/RAM/Disk/Network usage, plot it
+--share / -x                          with --perf: auto-export to C:\avd-metrics\ every 30s for SMB access
 ```
 
 `--specs` / `--perf` are a separate data path from the event-log analysis: they read the

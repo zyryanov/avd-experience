@@ -111,6 +111,11 @@ let printSpecs (spec: SystemSpec) =
     AnsiConsole.WriteLine()
     AnsiConsole.Write(table)
 
+let private formatBps (bps: float) =
+    if bps >= 1048576.0 then sprintf "%.1f MB/s" (bps / 1048576.0)
+    elif bps >= 1024.0  then sprintf "%.1f KB/s" (bps / 1024.0)
+    else sprintf "%.0f B/s" bps
+
 /// Build the live resource-usage table from a rolling window of samples.
 let perfRenderable (samples: PerfSample list) : Table =
     let table = Table()
@@ -133,7 +138,47 @@ let perfRenderable (samples: PerfSample list) : Table =
             sprintf "%.1f%%" avg,
             sprintf "%.1f%%" pk,
             sprintf "[%s]%s[/]" color (Markup.Escape spark)) |> ignore
+    let metricBps (name: string) (color: string) (field: PerfSample -> float) =
+        let now   = last |> Option.map field |> Option.defaultValue 0.0
+        let avg   = average field samples
+        let pk    = peak field samples
+        let spark = samples |> List.map field |> sparklineScaled
+        table.AddRow(
+            sprintf "[%s]%s[/]" color name,
+            sprintf "[%s]%s[/]" color (formatBps now),
+            formatBps avg,
+            formatBps pk,
+            sprintf "[%s]%s[/]" color (Markup.Escape spark)) |> ignore
+    let metricVal (name: string) (color: string) (unit: string) (field: PerfSample -> float) =
+        let now   = last |> Option.map field |> Option.defaultValue 0.0
+        let avg   = average field samples
+        let pk    = peak field samples
+        let spark = samples |> List.map field |> sparklineScaled
+        let fmt v = sprintf "%.1f%s" v unit
+        table.AddRow(
+            sprintf "[%s]%s[/]" color name,
+            sprintf "[%s]%s[/]" color (fmt now),
+            fmt avg,
+            fmt pk,
+            sprintf "[%s]%s[/]" color (Markup.Escape spark)) |> ignore
+    let rttColor (s: PerfSample) =
+        if s.RttMs > 200.0 then "red" elif s.RttMs > 100.0 then "yellow" else "green"
+    let fpsColor (s: PerfSample) =
+        if s.OutputFps < 10.0 then "red" elif s.OutputFps < 20.0 then "yellow" else "green"
+    let hasRdp = samples |> List.exists (fun s -> s.RttMs > 0.0 || s.OutputFps > 0.0)
     metric "CPU"  "green"      (fun s -> s.CpuPct)
     metric "RAM"  "yellow"     (fun s -> s.RamPct)
     metric "Disk" "steelblue1" (fun s -> s.DiskPct)
+    metricBps "DiskRead"  "green"       (fun s -> s.DiskReadBps)
+    metricBps "DiskWrite" "green"       (fun s -> s.DiskWriteBps)
+    metricBps "NetSent"   "dodgerblue1" (fun s -> s.NetSentBps)
+    metricBps "NetRecv"   "dodgerblue1" (fun s -> s.NetRecvBps)
+    if hasRdp then
+        let lastColor f = last |> Option.map f |> Option.defaultValue "green"
+        metricVal "RTT"      (lastColor rttColor) " ms"  (fun s -> s.RttMs)
+        metricVal "FPS"      (lastColor fpsColor) " fps" (fun s -> s.OutputFps)
+        metricVal "Encoding" "green"               " ms"  (fun s -> s.EncodingTimeMs)
+        metric    "Quality"  "green"                       (fun s -> s.FrameQuality)
+        metricVal "Skipped"  "red"                 "/s"   (fun s -> s.FramesSkippedSec)
+        metric    "Loss"     "red"                         (fun s -> s.LossRate)
     table

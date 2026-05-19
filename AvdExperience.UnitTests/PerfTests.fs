@@ -62,10 +62,39 @@ let ``sparkline maps each value`` () =
 let ``sparkline empty is empty`` () =
     sparkline [] |> should equal ""
 
+// ── PerfMonitor: scaled sparkline ────────────────────────────────────────────
+
+[<Fact>]
+let ``sparkBarScaled zero peak gives lowest`` () =
+    sparkBarScaled 0.0 50.0 |> should equal '▁'
+
+[<Fact>]
+let ``sparkBarScaled at peak gives full`` () =
+    sparkBarScaled 100.0 100.0 |> should equal '█'
+
+[<Fact>]
+let ``sparkBarScaled at half gives mid`` () =
+    sparkBarScaled 200.0 100.0 |> should equal '▅'
+
+[<Fact>]
+let ``sparkBarScaled over peak clamps`` () =
+    sparkBarScaled 50.0 80.0 |> should equal '█'
+
+[<Fact>]
+let ``sparklineScaled auto-scales to max`` () =
+    sparklineScaled [ 0.0; 50.0; 100.0 ] |> should equal "▁▅█"
+
+[<Fact>]
+let ``sparklineScaled empty is empty`` () =
+    sparklineScaled [] |> should equal ""
+
 // ── PerfMonitor: rolling buffer + aggregation ───────────────────────────────
 
 let private mk cpu : PerfSample =
-    { Time = DateTimeOffset.Now; CpuPct = cpu; RamPct = 0.0; RamUsedMB = 0.0; DiskPct = 0.0 }
+    { Time = DateTimeOffset.Now; CpuPct = cpu; RamPct = 0.0; RamUsedMB = 0.0; DiskPct = 0.0
+      DiskReadBps = 0.0; DiskWriteBps = 0.0; NetSentBps = 0.0; NetRecvBps = 0.0
+      RttMs = 0.0; OutputFps = 0.0; EncodingTimeMs = 0.0; FrameQuality = 0.0
+      FramesSkippedSec = 0.0; LossRate = 0.0 }
 
 [<Fact>]
 let ``pushSample keeps list under the cap`` () =

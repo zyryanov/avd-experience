@@ -37,7 +37,8 @@ dotnet test AvdExperience.IntegrationTests
 | `--monitor` | `-m` | — | Watch live event log; print each state transition with timestamp and duration |
 | `--csv` | `-c` | off | Export to CSV — events+intervals, or perf samples when paired with `--perf` |
 | `--specs` | `-i` | — | Print the host hardware spec (CPU, RAM, disks) and exit |
-| `--perf` | `-p` | — | Live mode: sample whole-VM CPU/RAM/Disk usage and plot it; pair with `--csv` to dump samples |
+| `--perf` | `-p` | — | Live mode: sample whole-VM CPU/RAM/Disk/Network + RDP quality metrics and plot it; pair with `--csv` to dump samples |
+| `--share` | `-x` | off | With `--perf`: auto-export metrics to `C:\avd-metrics\` every 30 s for remote SMB access |
 
 ## What It Reports
 
@@ -62,23 +63,64 @@ Primarily for debugging. Produces two files:
 - `avd-events-<from>--<to>.csv` — every relevant event with state machine context
 - `avd-events-<from>--<to>-intervals.csv` — typed intervals with durations
 
-With `--perf --csv`: `avd-perf-<timestamp>.csv` — one row per sample
-(`Timestamp,CpuPct,RamPct,RamUsedMB,DiskPct`).
+With `--perf --csv`: `avd-perf-<timestamp>.csv` — one row per 2 s sample with all
+15 metric columns (see [Performance Metrics](#performance-metrics--perf) below).
 
-## Resource Performance (`--specs` / `--perf`)
+## Performance Metrics (`--perf`)
 
 Separate from the event-log analysis: these read the **host's own hardware and
 performance counters**, so run them *inside the AVD session host*.
 
 - `--specs` — one-shot hardware inventory: CPU, logical CPU count, total/available
   RAM, fixed disks.
-- `--perf` — samples CPU / RAM / Disk every 2 s and renders a live table with
-  current / average / peak values and a sparkline trend. Ctrl+C to stop.
+- `--perf` — samples every 2 s and renders a live table with current / average /
+  peak values and a sparkline trend. Ctrl+C to stop.
 
-> **Note:** `--perf` counters are Windows `_Total` instances — they measure the
-> **whole VM** across all sessions, not just your user session. On a multi-session
+### Metrics collected
+
+| Metric | Source | Unit |
+|--------|--------|------|
+| CPU | Processor / % Processor Time / _Total | % |
+| RAM | Memory / Available MBytes | % |
+| Disk | PhysicalDisk / % Disk Time / _Total | % |
+| DiskRead | PhysicalDisk / Disk Read Bytes/sec / _Total | MB/s |
+| DiskWrite | PhysicalDisk / Disk Write Bytes/sec / _Total | MB/s |
+| NetSent | Network Interface / Bytes Sent/sec (all NICs) | MB/s |
+| NetRecv | Network Interface / Bytes Received/sec (all NICs) | MB/s |
+| RTT | RemoteFX Network / Current TCP or UDP RTT | ms |
+| FPS | RemoteFX Graphics / Output Frames/Second | fps |
+| Encoding | RemoteFX Graphics / Average Encoding Time | ms |
+| Quality | RemoteFX Graphics / Frame Quality | % |
+| Skipped | RemoteFX Graphics / Frames Skipped/Second (sum) | /s |
+| Loss | RemoteFX Network / Loss Rate | % |
+
+RDP metrics (RTT through Loss) appear only when running inside an RDP session.
+They use per-session RemoteFX counters, not whole-VM totals.
+
+> **Note:** System counters (CPU, RAM, Disk, Network) are Windows `_Total`
+> instances — they measure the **whole VM** across all sessions. On a multi-session
 > host the numbers reflect everyone on the box. Disk/CPU counters need admin or
 > "Performance Monitor Users" membership (the tool already self-elevates via UAC).
+
+### Remote access (`--share`)
+
+```bash
+dotnet run -- --perf --share
+```
+
+Writes metrics to `C:\avd-metrics\` for remote access via SMB admin share:
+
+| File | Contents | Update frequency |
+|------|----------|-----------------|
+| `avd-specs.txt` | Hardware spec (CPU, RAM, disk, OS) | Once at start |
+| `avd-perf-latest.csv` | Rolling window (last 60 samples) | Every 30 s |
+| `avd-perf-full.csv` | Complete session history | On Ctrl+C exit |
+
+Access from another machine:
+
+```
+\\<MACHINE>\C$\avd-metrics\avd-perf-latest.csv
+```
 
 ## Architecture
 
@@ -90,7 +132,7 @@ EventLog.fs      — Windows Event Log I/O (XPath queries)
 Events.fs        — Event ID classifiers and domain knowledge
 Stats.fs         — State machine: raw events → typed intervals → DayStats/PeriodStats
 SysInfo.fs       — Static hardware spec (CPU/RAM/disks)
-PerfMonitor.fs   — Live CPU/RAM/Disk perf-counter sampling
+PerfMonitor.fs   — Live CPU/RAM/Disk/Network + RemoteFX RDP perf-counter sampling
 CsvExport.fs     — Write events/intervals/perf samples to CSV
 Report.fs        — Format PeriodStats, spec table, and live usage for console
 Program.fs       — CLI arg parsing (Argu), pipeline orchestration

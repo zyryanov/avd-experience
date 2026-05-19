@@ -18,6 +18,7 @@ type Args =
     | [<AltCommandLine("-c")>] Csv
     | [<AltCommandLine("-i")>] Specs
     | [<AltCommandLine("-p")>] Perf
+    | [<AltCommandLine("-x")>] Share
     interface IArgParserTemplate with
         member x.Usage =
             match x with
@@ -27,6 +28,7 @@ type Args =
             | Csv     -> "export to CSV files (events+intervals, or perf samples with --perf); off by default"
             | Specs   -> "print the host hardware spec (CPU, RAM, disks) and exit"
             | Perf    -> "live mode: sample whole-VM CPU/RAM/Disk usage and plot it; pair with --csv to also dump samples"
+            | Share   -> "with --perf: auto-export metrics to C:\\avd-metrics\\ every 30s for remote access via SMB admin share"
 
 let private fmt (d: DateTimeOffset) = d.ToString "yyyy-MM-dd"
 
@@ -166,9 +168,18 @@ let private runSpecs () : int =
     printSpecs (collect ())
     0
 
-let private runPerf (writeCsv: bool) : int =
+let private shareDir = @"C:\avd-metrics"
+let private shareFlushInterval = 15
+
+let private runPerf (writeCsv: bool) (share: bool) : int =
     let spec = collect ()
     printSpecs spec
+    if share then
+        Directory.CreateDirectory shareDir |> ignore
+        writeSpecsTxt (Path.Combine(shareDir, "avd-specs.txt")) spec
+        let unc = sprintf @"\\%s\C$\avd-metrics\" spec.MachineName
+        AnsiConsole.MarkupLine(sprintf "[green]✓ Share:[/] %s" (Markup.Escape shareDir))
+        AnsiConsole.MarkupLine(sprintf "[dim]Remote:[/] %s" (Markup.Escape unc))
     match createCounters () with
     | Error msg ->
         AnsiConsole.MarkupLine(sprintf "[red bold]✗ Cannot read performance counters:[/] %s" (Markup.Escape msg))
@@ -177,24 +188,31 @@ let private runPerf (writeCsv: bool) : int =
     | Ok counters ->
         let totalRamMB = float spec.TotalRamBytes / 1048576.0
         let all = ResizeArray<PerfSample>()
+        let mutable tick = 0
         use stop = new Threading.ManualResetEventSlim(false)
         Console.CancelKeyPress.Add(fun e ->
             e.Cancel <- true
             stop.Set())
-        sample counters totalRamMB |> ignore   // discard first — NextValue() warms up at 0.0
+        sample counters totalRamMB |> ignore
         AnsiConsole.MarkupLine "[dim italic]Sampling every 2s… (Ctrl+C to stop)[/]"
         AnsiConsole.Live(perfRenderable []).Start(fun ctx ->
             while not stop.IsSet do
                 let s = sample counters totalRamMB
                 all.Add s
+                tick <- tick + 1
                 let window =
                     let n = all.Count
                     if n > perfWindow then List.ofSeq (Seq.skip (n - perfWindow) all)
                     else List.ofSeq all
                 ctx.UpdateTarget(perfRenderable window)
                 ctx.Refresh()
+                if share && tick % shareFlushInterval = 0 then
+                    writePerfCsv (Path.Combine(shareDir, "avd-perf-latest.csv")) window
                 stop.Wait perfIntervalMs |> ignore)
         dispose counters
+        if share && all.Count > 0 then
+            writePerfCsv (Path.Combine(shareDir, "avd-perf-full.csv")) (List.ofSeq all)
+            AnsiConsole.MarkupLine(sprintf "[green]✓ Full export:[/] %s" (Markup.Escape (Path.Combine(shareDir, "avd-perf-full.csv"))))
         if writeCsv && all.Count > 0 then
             let path = nextAvailablePath (sprintf "avd-perf-%s" (DateTime.Now.ToString "yyyyMMdd-HHmmss")) ".csv"
             writePerfCsv path (List.ofSeq all)
@@ -212,7 +230,7 @@ let private runParsed (argv: string[]) =
     | Error code -> code
     | Ok args when args.Contains Monitor -> runMonitor ()
     | Ok args when args.Contains Specs -> runSpecs ()
-    | Ok args when args.Contains Perf -> runPerf (args.Contains Csv)
+    | Ok args when args.Contains Perf -> runPerf (args.Contains Csv) (args.Contains Share)
     | Ok args ->
         let from =
             match args.TryGetResult Start with
