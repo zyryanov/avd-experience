@@ -23,7 +23,7 @@ jobs:
           dotnet-version: '10.x'
 
       - name: Test
-        run: dotnet test avd-experience.Tests
+        run: dotnet test AvdExperience.Tests
 
       - name: Publish
         run: |

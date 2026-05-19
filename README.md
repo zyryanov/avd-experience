@@ -24,7 +24,7 @@ dotnet run -- [options]
 ### Testing
 
 ```bash
-dotnet test avd-experience.Tests
+dotnet test AvdExperience.Tests
 ```
 
 ## CLI Options
