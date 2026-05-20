@@ -99,7 +99,6 @@ let splitByDay (interval: Interval) : (DateOnly * TimeSpan) list =
 
 let stepState
     (state: (IntervalKind * DateTimeOffset) option)
-    (locked: bool)
     (e: LogEvent)
     : (IntervalKind * DateTimeOffset) option * Interval option =
     let close kind t = Some { Kind = kind; Start = t; End = e.TimeCreated }
@@ -128,12 +127,6 @@ let stepState
         Some (Paused, e.TimeCreated), close Connecting t
     | None when isUserDisconnected e ->
         Some (Paused, e.TimeCreated), None
-    | Some (Active, t) when isDisconnected e && locked ->
-        Some (Paused, e.TimeCreated), close Active t
-    | Some (Connecting, t) when isDisconnected e && locked ->
-        Some (Paused, e.TimeCreated), close Connecting t
-    | None when isDisconnected e && locked ->
-        Some (Paused, e.TimeCreated), None
     | Some (Active, t) when isThreadWatchdog e ->
         Some (Issue, e.TimeCreated), close Active t
     | Some (Active, t) when isDisconnected e ->
@@ -142,10 +135,49 @@ let stepState
         Some (Issue, e.TimeCreated), close Connecting t
     | None when isDisconnected e ->
         Some (Issue, e.TimeCreated), None
-    | Some (kind, t) when isWorkstationLocked e && (kind = Active || kind = Connecting || kind = Issue) ->
-        Some (Paused, e.TimeCreated), close kind t
     | _ ->
         state, None
+
+// Tracks AVD state during workstation lock without generating outward intervals.
+// Shadow starts as Paused; unexpected drops stay Paused (absorbed into lock period).
+// Only explicit reconnect events advance shadow to Active; powerDown resets to None.
+let private shadowStep (shadow: (IntervalKind * DateTimeOffset) option) (e: LogEvent) =
+    match shadow with
+        | _ when isUserDisconnected e -> None
+        | _ when isConnectInitiated e -> Some (Connecting, e.TimeCreated)
+        | Some (Connecting, _) when isConnected e -> Some (Active, e.TimeCreated)
+        | Some (_, _) when isConnected e -> Some (Active, e.TimeCreated)
+        | None when isConnected e -> Some (Active, e.TimeCreated)
+        | Some (Active, _) when isThreadWatchdog e -> Some (Paused, e.TimeCreated)
+        | Some (Active, _) when isDisconnected e -> Some (Paused, e.TimeCreated)
+        | Some (Connecting, _) when isDisconnected e -> Some (Paused, e.TimeCreated)
+        | _ -> shadow
+
+// Advance outward state, locked flag, and shadow state by one event.
+// Encapsulates lock/unlock routing so callers (monitor, bootstrap) share the same logic.
+// Returns: (newState, newLocked, newShadow, closedInterval)
+let advanceState
+    (state: (IntervalKind * DateTimeOffset) option)
+    (locked: bool)
+    (shadowState: (IntervalKind * DateTimeOffset) option)
+    (e: LogEvent)
+    : (IntervalKind * DateTimeOffset) option * bool * (IntervalKind * DateTimeOffset) option * Interval option =
+    if isWorkstationLocked e && not locked then
+        let outward, closed =
+            match state with
+            | Some ((Active | Connecting | Issue) as kind, t) ->
+                Some (Paused, e.TimeCreated), Some { Kind = kind; Start = t; End = e.TimeCreated }
+            | _ -> state, None
+        outward, true, state, closed
+    elif isWorkstationUnlocked e && locked then
+        let closed = match state with Some (Paused, t) -> Some { Kind = Paused; Start = t; End = e.TimeCreated } | _ -> None
+        let newState = match shadowState with Some (kind, _) -> Some (kind, e.TimeCreated) | None -> None
+        newState, false, None, closed
+    elif locked then
+        state, true, shadowStep shadowState e, None
+    else
+        let newState, closed = stepState state e
+        newState, false, None, closed
 
 let private buildIntervalsWithTrace (initState: (IntervalKind * DateTimeOffset) option) (initLocked: bool) (periodEnd: DateTimeOffset) (events: LogEvent list) : Interval list * EventTrace list =
     let effectiveEnd = min periodEnd DateTimeOffset.Now
@@ -158,7 +190,7 @@ let private buildIntervalsWithTrace (initState: (IntervalKind * DateTimeOffset) 
           ClosedInterval = closed
           ReportContribution = contribution }
 
-    let rec walk state connectReason locked acc traces remaining =
+    let rec walk state connectReason locked shadowState acc traces remaining =
         match remaining with
         | [] ->
             match state with
@@ -167,17 +199,49 @@ let private buildIntervalsWithTrace (initState: (IntervalKind * DateTimeOffset) 
                 List.rev (closed :: acc), List.rev traces
             | None -> List.rev acc, List.rev traces
         | e :: rest ->
-            let newState, closed = stepState state locked e
-            let locked' = if isWorkstationLocked e then true elif isWorkstationUnlocked e then false else locked
-            let contribution =
-                match closed with
-                | None    -> TimeSpan.Zero
-                | Some iv -> intervalReportContrib iv.Kind connectReason (iv.End - iv.Start)
-            let reason' = nextConnectReason state newState connectReason
-            let acc' = match closed with Some iv -> iv :: acc | None -> acc
-            walk newState reason' locked' acc' (trace state newState closed contribution e :: traces) rest
+            if isWorkstationLocked e && not locked then
+                let outward, closed =
+                    match state with
+                    | Some ((Active | Connecting | Issue) as kind, t) ->
+                        Some (Paused, e.TimeCreated),
+                        Some { Kind = kind; Start = t; End = e.TimeCreated }
+                    | _ -> state, None
+                let contrib =
+                    match closed with
+                    | None -> TimeSpan.Zero
+                    | Some iv -> intervalReportContrib iv.Kind connectReason (iv.End - iv.Start)
+                let reason' = nextConnectReason state outward connectReason
+                let acc' = match closed with Some iv -> iv :: acc | None -> acc
+                walk outward reason' true state acc' (trace state outward closed contrib e :: traces) rest
 
-    walk initState None initLocked [] [] events
+            elif isWorkstationUnlocked e && locked then
+                let closed =
+                    match state with
+                    | Some (Paused, t) -> Some { Kind = Paused; Start = t; End = e.TimeCreated }
+                    | _ -> None
+                let newState =
+                    match shadowState with
+                    | Some (kind, _) -> Some (kind, e.TimeCreated)
+                    | None -> None
+                let reason' = nextConnectReason state newState connectReason
+                let acc' = match closed with Some iv -> iv :: acc | None -> acc
+                walk newState reason' false None acc' (trace state newState closed TimeSpan.Zero e :: traces) rest
+
+            elif locked then
+                let shadow' = shadowStep shadowState e
+                walk state connectReason true shadow' acc (trace state state None TimeSpan.Zero e :: traces) rest
+
+            else
+                let newState, closed = stepState state e
+                let contrib =
+                    match closed with
+                    | None    -> TimeSpan.Zero
+                    | Some iv -> intervalReportContrib iv.Kind connectReason (iv.End - iv.Start)
+                let reason' = nextConnectReason state newState connectReason
+                let acc' = match closed with Some iv -> iv :: acc | None -> acc
+                walk newState reason' false None acc' (trace state newState closed contrib e :: traces) rest
+
+    walk initState None initLocked initState [] [] events
 
 let computeWithTrace (initState: (IntervalKind * DateTimeOffset) option) (initLocked: bool) (periodEnd: DateTimeOffset) (events: LogEvent list) : PeriodStats * TraceResult =
     if events.IsEmpty then

@@ -17,19 +17,19 @@ let unlockEvent t       = makeEventAt 4801 "Microsoft-Windows-Security-Auditing"
 let sleepEvent t        = makeEventAt 42 "Microsoft-Windows-Kernel-Power" [] t
 let watchdogEvent t     = makeEventAt 1033 "Microsoft-Windows-TerminalServices-ClientActiveXCore" ["ThreadWatchdog"; "RECEIVE thread did not finish callback within 1000 milliseconds."; "-2147024474"] t
 
-let step state locked event = stepState state locked event
+let step state event = stepState state event
 
 // ── stepState: None → Connecting ─────────────────────────────────────────────
 
 [<Fact>]
 let ``None + ConnectionInitiated → Connecting, no closed interval`` () =
-    let state, closed = step None false (connectEvent t1)
+    let state, closed = step None (connectEvent t1)
     state |> Option.map fst |> should equal (Some Connecting)
     closed |> should equal None
 
 [<Fact>]
 let ``None + Connected → Active, no closed interval`` () =
-    let state, closed = step None false (connectedEvent t1)
+    let state, closed = step None (connectedEvent t1)
     state |> Option.map fst |> should equal (Some Active)
     closed |> should equal None
 
@@ -38,7 +38,7 @@ let ``None + Connected → Active, no closed interval`` () =
 [<Fact>]
 let ``Connecting + Connected → Active, closes Connecting interval`` () =
     let init = Some (Connecting, t0)
-    let state, closed = step init false (connectedEvent t1)
+    let state, closed = step init (connectedEvent t1)
     state |> Option.map fst |> should equal (Some Active)
     closed |> Option.map (fun i -> i.Kind) |> should equal (Some Connecting)
     closed |> Option.map (fun i -> i.Start) |> should equal (Some t0)
@@ -49,44 +49,30 @@ let ``Connecting + Connected → Active, closes Connecting interval`` () =
 [<Fact>]
 let ``Active + PowerDown → Paused, closes Active interval`` () =
     let init = Some (Active, t0)
-    let state, closed = step init false (sleepEvent t1)
+    let state, closed = step init (sleepEvent t1)
     state |> Option.map fst |> should equal (Some Paused)
     closed |> Option.map (fun i -> i.Kind) |> should equal (Some Active)
 
 [<Fact>]
 let ``Active + UserDisconnected → Paused, closes Active interval`` () =
     let init = Some (Active, t0)
-    let state, closed = step init false (userDiscEvent t1)
-    state |> Option.map fst |> should equal (Some Paused)
-    closed |> Option.map (fun i -> i.Kind) |> should equal (Some Active)
-
-[<Fact>]
-let ``Active + WorkstationLocked → Paused, closes Active interval`` () =
-    let init = Some (Active, t0)
-    let state, closed = step init false (lockEvent t1)
-    state |> Option.map fst |> should equal (Some Paused)
-    closed |> Option.map (fun i -> i.Kind) |> should equal (Some Active)
-
-[<Fact>]
-let ``Active + Disconnect while locked → Paused`` () =
-    let init = Some (Active, t0)
-    let state, closed = step init true (disconnEvent t1)
+    let state, closed = step init (userDiscEvent t1)
     state |> Option.map fst |> should equal (Some Paused)
     closed |> Option.map (fun i -> i.Kind) |> should equal (Some Active)
 
 // ── stepState: Active → Issue ─────────────────────────────────────────────────
 
 [<Fact>]
-let ``Active + Disconnect while not locked → Issue`` () =
+let ``Active + Disconnect → Issue`` () =
     let init = Some (Active, t0)
-    let state, closed = step init false (disconnEvent t1)
+    let state, closed = step init (disconnEvent t1)
     state |> Option.map fst |> should equal (Some Issue)
     closed |> Option.map (fun i -> i.Kind) |> should equal (Some Active)
 
 [<Fact>]
 let ``Active + ThreadWatchdog → Issue, closes Active at watchdog time`` () =
     let init = Some (Active, t0)
-    let state, closed = step init false (watchdogEvent t1)
+    let state, closed = step init (watchdogEvent t1)
     state |> Option.map fst |> should equal (Some Issue)
     closed |> Option.map (fun i -> i.Kind) |> should equal (Some Active)
     closed |> Option.map (fun i -> i.End) |> should equal (Some t1)
@@ -94,30 +80,23 @@ let ``Active + ThreadWatchdog → Issue, closes Active at watchdog time`` () =
 [<Fact>]
 let ``Issue + Disconnect (1026 after watchdog) → stays Issue`` () =
     let init = Some (Issue, t1)
-    let state, closed = step init false (disconnEvent t2)
+    let state, closed = step init (disconnEvent t2)
     state |> Option.map fst |> should equal (Some Issue)
     closed |> should equal None
 
-// ── stepState: Connecting → Paused ───────────────────────────────────────────
+// ── stepState: Connecting → Paused / Issue ───────────────────────────────────
 
 [<Fact>]
 let ``Connecting + PowerDown → Paused, closes Connecting`` () =
     let init = Some (Connecting, t0)
-    let state, closed = step init false (sleepEvent t1)
+    let state, closed = step init (sleepEvent t1)
     state |> Option.map fst |> should equal (Some Paused)
     closed |> Option.map (fun i -> i.Kind) |> should equal (Some Connecting)
 
 [<Fact>]
-let ``Connecting + Disconnect while locked → Paused`` () =
+let ``Connecting + Disconnect → Issue`` () =
     let init = Some (Connecting, t0)
-    let state, closed = step init true (disconnEvent t1)
-    state |> Option.map fst |> should equal (Some Paused)
-    closed |> Option.map (fun i -> i.Kind) |> should equal (Some Connecting)
-
-[<Fact>]
-let ``Connecting + Disconnect while not locked → Issue`` () =
-    let init = Some (Connecting, t0)
-    let state, closed = step init false (disconnEvent t1)
+    let state, closed = step init (disconnEvent t1)
     state |> Option.map fst |> should equal (Some Issue)
     closed |> Option.map (fun i -> i.Kind) |> should equal (Some Connecting)
 
@@ -126,7 +105,7 @@ let ``Connecting + Disconnect while not locked → Issue`` () =
 [<Fact>]
 let ``Paused + ConnectionInitiated → Connecting, closes Paused`` () =
     let init = Some (Paused, t0)
-    let state, closed = step init false (connectEvent t1)
+    let state, closed = step init (connectEvent t1)
     state |> Option.map fst |> should equal (Some Connecting)
     closed |> Option.map (fun i -> i.Kind) |> should equal (Some Paused)
 
@@ -135,7 +114,7 @@ let ``Paused + ConnectionInitiated → Connecting, closes Paused`` () =
 [<Fact>]
 let ``Issue + ConnectionInitiated → Connecting, closes Issue`` () =
     let init = Some (Issue, t0)
-    let state, closed = step init false (connectEvent t1)
+    let state, closed = step init (connectEvent t1)
     state |> Option.map fst |> should equal (Some Connecting)
     closed |> Option.map (fun i -> i.Kind) |> should equal (Some Issue)
 
@@ -144,23 +123,106 @@ let ``Issue + ConnectionInitiated → Connecting, closes Issue`` () =
 [<Fact>]
 let ``Active + Connected again → no change`` () =
     let init = Some (Active, t0)
-    let state, closed = step init false (connectedEvent t1)
+    let state, closed = step init (connectedEvent t1)
     state |> should equal init
     closed |> should equal None
 
 [<Fact>]
 let ``Active + ConnectionInitiated → no change (already active)`` () =
     let init = Some (Active, t0)
-    let state, closed = step init false (connectEvent t1)
+    let state, closed = step init (connectEvent t1)
     state |> should equal init
     closed |> should equal None
 
 [<Fact>]
 let ``PowerDown while Paused → no change`` () =
     let init = Some (Paused, t0)
-    let state, closed = step init false (sleepEvent t1)
+    let state, closed = step init (sleepEvent t1)
     state |> should equal init
     closed |> should equal None
+
+// ── lock/unlock scenarios (walk-level via computeWithTrace) ───────────────────
+
+let runTrace events =
+    let periodEnd = DateTimeOffset.MaxValue
+    let _, tr = computeWithTrace None false periodEnd events
+    tr.Intervals
+
+[<Fact>]
+let ``Active + Lock + no events + Unlock → Active resumes after Paused`` () =
+    // No AVD disconnect during lock → session survived → shadow stays Active → resumes Active
+    let events = [
+        connectedEvent t0
+        lockEvent t1
+        unlockEvent t2
+    ]
+    let intervals = runTrace events
+    let kinds = intervals |> List.map (fun i -> i.Kind)
+    kinds |> should equal [ Active; Paused; Active ]
+    intervals |> List.item 1 |> (fun i -> i.Start) |> should equal t1
+    intervals |> List.item 1 |> (fun i -> i.End)   |> should equal t2
+    intervals |> List.item 2 |> (fun i -> i.Start) |> should equal t2
+
+[<Fact>]
+let ``Active + Lock + Disconnect + Unlock → disconnect absorbed into Paused`` () =
+    // Drop during lock is absorbed into the Paused period; shadow stays Paused
+    let events = [
+        connectedEvent t0
+        lockEvent t1
+        disconnEvent t2
+        unlockEvent t3
+    ]
+    let intervals = runTrace events
+    intervals |> List.item 0 |> (fun i -> i.Kind) |> should equal Active
+    intervals |> List.item 1 |> (fun i -> i.Kind) |> should equal Paused
+    intervals |> List.item 1 |> (fun i -> i.Start) |> should equal t1
+    intervals |> List.item 1 |> (fun i -> i.End)   |> should equal t3
+    intervals |> List.item 2 |> (fun i -> i.Kind) |> should equal Paused
+    intervals |> List.item 2 |> (fun i -> i.Start) |> should equal t3
+
+[<Fact>]
+let ``Active + Lock + Disconnect + Reconnect + Unlock → Paused then Active`` () =
+    let events = [
+        connectedEvent t0
+        lockEvent t1
+        disconnEvent t2
+        connectEvent t3
+        connectedEvent t4
+        unlockEvent t5
+    ]
+    let intervals = runTrace events
+    let kinds = intervals |> List.map (fun i -> i.Kind)
+    kinds |> should equal [ Active; Paused; Active ]
+    intervals |> List.item 2 |> (fun i -> i.Start) |> should equal t5
+
+[<Fact>]
+let ``Active + Lock + PowerDown + Unlock → Active resumes (sleep ignored in shadow)`` () =
+    // Sleep during lock is transparent — no AVD disconnect fired → shadow stays Active → resumes
+    let events = [
+        connectedEvent t0
+        lockEvent t1
+        sleepEvent t2
+        unlockEvent t3
+    ]
+    let intervals = runTrace events
+    let kinds = intervals |> List.map (fun i -> i.Kind)
+    kinds |> should equal [ Active; Paused; Active ]
+    intervals |> List.item 1 |> (fun i -> i.Start) |> should equal t1
+    intervals |> List.item 1 |> (fun i -> i.End)   |> should equal t3
+    intervals |> List.item 2 |> (fun i -> i.Start) |> should equal t3
+
+[<Fact>]
+let ``No session + Lock + Connect + Connected + Unlock → Active at unlock`` () =
+    let events = [
+        lockEvent t1
+        connectEvent t2
+        connectedEvent t3
+        unlockEvent t4
+    ]
+    let intervals = runTrace events
+    let kinds = intervals |> List.map (fun i -> i.Kind)
+    kinds |> should equal [ Active ]
+    intervals |> List.head |> (fun i -> i.Start) |> should equal t4
 
 // ── intervalReportContrib ─────────────────────────────────────────────────────
 

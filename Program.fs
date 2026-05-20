@@ -60,17 +60,18 @@ let private deriveStateAt (at: DateTimeOffset) : (IntervalKind * DateTimeOffset)
     let sec  = match queryLockEvents from at              with Ok evs -> evs | Error _ -> []
     let events = rdp @ sys @ sec |> List.sortBy (fun e -> e.TimeCreated)
     events |> List.fold
-        (fun (st, lk) e ->
-            let after, _ = stepState st lk e
-            let lk' = if isWorkstationLocked e then true elif isWorkstationUnlocked e then false else lk
-            after, lk')
-        (None, false)
+        (fun (st, lk, shadow) e ->
+            let st', lk', shadow', _ = advanceState st lk shadow e
+            st', lk', shadow')
+        (None, false, None)
+    |> (fun (st, lk, _) -> st, lk)
 
 let private runMonitor () : int =
     let lockObj = obj()
     let initState, initLocked = deriveStateAt DateTimeOffset.Now
     let state = ref initState
     let wsLocked = ref initLocked
+    let shadowState : (IntervalKind * DateTimeOffset) option ref = ref (if initLocked then initState else None)
     let connectReason : ConnectReason option ref = ref None
     AnsiConsole.MarkupLine(sprintf "[dim]Initial state:[/] %s" (stateMarkup initState))
     let done_ = new Threading.ManualResetEventSlim false
@@ -78,10 +79,10 @@ let private runMonitor () : int =
     let onEvent (e: LogEvent) =
         lock lockObj (fun () ->
             let before = state.Value
-            let after, closed = stepState before wsLocked.Value e
+            let after, lk', shadow', closed = advanceState before wsLocked.Value shadowState.Value e
             state.Value <- after
-            if isWorkstationLocked e then wsLocked.Value <- true
-            elif isWorkstationUnlocked e then wsLocked.Value <- false
+            wsLocked.Value <- lk'
+            shadowState.Value <- shadow'
             let contrib =
                 match closed with
                 | Some iv -> intervalReportContrib iv.Kind connectReason.Value (iv.End - iv.Start)

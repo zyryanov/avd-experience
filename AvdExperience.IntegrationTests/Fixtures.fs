@@ -40,8 +40,9 @@ let issueReconnectEvents =
       userDisc  (b.AddHours 17.0) ]
 
 // ── Scenario 3: Lock/unlock cycle ────────────────────────────────────────────
-// 09:00 initiate → 09:01 connected → 12:00 lock →
+// 09:00 initiate → 09:01 connected → 12:00 lock → 12:05 AVD drops (1026) →
 // 12:30 unlock → 12:30 initiate → 12:31 connected → 17:00 user disconnect, periodEnd 18:00
+// Drop during lock → shadow=Paused → unlock→Paused → reconnect PostPause
 // Report: C1(Initial,1min)=6, Active1(Initial)=0, Paused=0,
 //         C2(PostPause,1min)=1, Active2(PostPause)=0 → total 7min
 let lockUnlockEnd = DateTimeOffset(2026, 1, 17, 18, 0, 0, TimeSpan.Zero)
@@ -50,6 +51,7 @@ let lockUnlockEvents =
     [ rdp 1024  (b.AddHours 9.0)
       rdp 1027  (b.AddHours 9.0 + TimeSpan.FromMinutes 1.0)
       lock      (b.AddHours 12.0)
+      disc      (b.AddHours 12.0 + TimeSpan.FromMinutes 5.0)
       unlock    (b.AddHours 12.5)
       rdp 1024  (b.AddHours 12.5)
       rdp 1027  (b.AddHours 12.5 + TimeSpan.FromMinutes 1.0)
