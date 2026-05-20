@@ -10,7 +10,7 @@ let isDisconnected (e: LogEvent) = e.Id = 1026
 let isUserDisconnected (e: LogEvent) =
     e.Id = 1026 &&
     e.Properties.Length > 1 &&
-    (e.Properties.[1] = "1" || e.Properties.[1] = "2")
+    (e.Properties.[1] = "1" || e.Properties.[1] = "2" || e.Properties.[1] = "3")
 
 let isPowerDown (e: LogEvent) =
     (e.Provider = "Microsoft-Windows-Kernel-Power" && e.Id = 42) ||

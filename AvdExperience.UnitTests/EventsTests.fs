@@ -50,8 +50,8 @@ let ``isUserDisconnected matches 1026 with reason 2`` () =
     makeEvent 1026 "" ["x"; "2"] |> isUserDisconnected |> should equal true
 
 [<Fact>]
-let ``isUserDisconnected rejects 1026 with reason 3`` () =
-    makeEvent 1026 "" ["x"; "3"] |> isUserDisconnected |> should equal false
+let ``isUserDisconnected matches 1026 with reason 3`` () =
+    makeEvent 1026 "" ["x"; "3"] |> isUserDisconnected |> should equal true
 
 [<Fact>]
 let ``isUserDisconnected rejects 1026 with no properties`` () =
