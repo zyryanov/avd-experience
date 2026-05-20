@@ -22,6 +22,10 @@ let isPowerResume (e: LogEvent) =
 
 let isConnectionCanceled (e: LogEvent) = e.Id = 1033
 
+// ThreadWatchdog 1033: simultaneous RECEIVE+SEND I/O stall — reliable early network-drop signal
+let isThreadWatchdog (e: LogEvent) =
+    e.Id = 1033 && e.Properties.Length > 0 && e.Properties.[0] = "ThreadWatchdog"
+
 let isWorkstationLocked (e: LogEvent) = e.Id = 4800
 let isWorkstationUnlocked (e: LogEvent) = e.Id = 4801
 

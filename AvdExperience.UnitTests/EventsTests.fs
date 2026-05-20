@@ -115,6 +115,27 @@ let ``isConnectionCanceled matches 1033`` () =
 let ``isConnectionCanceled rejects 1032`` () =
     rdpEvent 1032 |> isConnectionCanceled |> should equal false
 
+// ── isThreadWatchdog ──────────────────────────────────────────────────────────
+
+[<Fact>]
+let ``isThreadWatchdog matches 1033 with ThreadWatchdog property`` () =
+    makeEvent 1033 "" ["ThreadWatchdog"; "RECEIVE thread did not finish callback within 1000 milliseconds."; "-2147024474"]
+    |> isThreadWatchdog |> should equal true
+
+[<Fact>]
+let ``isThreadWatchdog rejects 1033 with no properties`` () =
+    rdpEvent 1033 |> isThreadWatchdog |> should equal false
+
+[<Fact>]
+let ``isThreadWatchdog rejects 1033 with non-watchdog component`` () =
+    makeEvent 1033 "" ["slint"; "SL::OnDisconnected"; "16644"]
+    |> isThreadWatchdog |> should equal false
+
+[<Fact>]
+let ``isThreadWatchdog rejects other id with ThreadWatchdog property`` () =
+    makeEvent 1026 "" ["ThreadWatchdog"; "msg"; "0"]
+    |> isThreadWatchdog |> should equal false
+
 // ── isWorkstationLocked / Unlocked ────────────────────────────────────────────
 
 [<Fact>]

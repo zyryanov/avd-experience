@@ -134,6 +134,8 @@ let stepState
         Some (Paused, e.TimeCreated), close Connecting t
     | None when isDisconnected e && locked ->
         Some (Paused, e.TimeCreated), None
+    | Some (Active, t) when isThreadWatchdog e ->
+        Some (Issue, e.TimeCreated), close Active t
     | Some (Active, t) when isDisconnected e ->
         Some (Issue, e.TimeCreated), close Active t
     | Some (Connecting, t) when isDisconnected e ->

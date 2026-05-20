@@ -8,13 +8,14 @@ open AvdStats.Stats
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-let connectEvent t    = rdpEventAt 1024 t
-let connectedEvent t  = rdpEventAt 1027 t
-let disconnEvent t    = rdpEventAt 1026 t
-let userDiscEvent t   = makeEventAt 1026 "" ["x"; "1"] t
-let lockEvent t       = makeEventAt 4800 "Microsoft-Windows-Security-Auditing" [] t
-let unlockEvent t     = makeEventAt 4801 "Microsoft-Windows-Security-Auditing" [] t
-let sleepEvent t      = makeEventAt 42 "Microsoft-Windows-Kernel-Power" [] t
+let connectEvent t      = rdpEventAt 1024 t
+let connectedEvent t    = rdpEventAt 1027 t
+let disconnEvent t      = rdpEventAt 1026 t
+let userDiscEvent t     = makeEventAt 1026 "" ["x"; "1"] t
+let lockEvent t         = makeEventAt 4800 "Microsoft-Windows-Security-Auditing" [] t
+let unlockEvent t       = makeEventAt 4801 "Microsoft-Windows-Security-Auditing" [] t
+let sleepEvent t        = makeEventAt 42 "Microsoft-Windows-Kernel-Power" [] t
+let watchdogEvent t     = makeEventAt 1033 "Microsoft-Windows-TerminalServices-ClientActiveXCore" ["ThreadWatchdog"; "RECEIVE thread did not finish callback within 1000 milliseconds."; "-2147024474"] t
 
 let step state locked event = stepState state locked event
 
@@ -81,6 +82,21 @@ let ``Active + Disconnect while not locked → Issue`` () =
     let state, closed = step init false (disconnEvent t1)
     state |> Option.map fst |> should equal (Some Issue)
     closed |> Option.map (fun i -> i.Kind) |> should equal (Some Active)
+
+[<Fact>]
+let ``Active + ThreadWatchdog → Issue, closes Active at watchdog time`` () =
+    let init = Some (Active, t0)
+    let state, closed = step init false (watchdogEvent t1)
+    state |> Option.map fst |> should equal (Some Issue)
+    closed |> Option.map (fun i -> i.Kind) |> should equal (Some Active)
+    closed |> Option.map (fun i -> i.End) |> should equal (Some t1)
+
+[<Fact>]
+let ``Issue + Disconnect (1026 after watchdog) → stays Issue`` () =
+    let init = Some (Issue, t1)
+    let state, closed = step init false (disconnEvent t2)
+    state |> Option.map fst |> should equal (Some Issue)
+    closed |> should equal None
 
 // ── stepState: Connecting → Paused ───────────────────────────────────────────
 
