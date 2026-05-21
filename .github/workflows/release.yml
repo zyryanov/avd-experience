@@ -32,7 +32,7 @@ jobs:
       - name: Publish
         run: |
           $version = "${{ github.ref_name }}".TrimStart('v')
-          dotnet publish -c Release -p:Version=$version -o publish/
+          dotnet publish -p:PublishProfile=win-x64 -p:Version=$version -o publish/
 
       - name: Release
         uses: softprops/action-gh-release@v2

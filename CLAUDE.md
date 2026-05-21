@@ -139,4 +139,5 @@ dotnet run -- --monitor
 dotnet run -- --csv
 dotnet test AvdExperience.UnitTests
 dotnet test AvdExperience.IntegrationTests
+dotnet publish -p:PublishProfile=win-x64
 ```
