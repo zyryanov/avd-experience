@@ -171,7 +171,7 @@ let advanceState
         outward, true, state, closed
     elif isWorkstationUnlocked e && locked then
         let closed = match state with Some (Paused, t) -> Some { Kind = Paused; Start = t; End = e.TimeCreated } | _ -> None
-        let newState = match shadowState with Some (kind, _) -> Some (kind, e.TimeCreated) | None -> None
+        let newState = match shadowState with Some (kind, _) -> Some (kind, e.TimeCreated) | None -> Some (Paused, e.TimeCreated)
         newState, false, None, closed
     elif locked then
         state, true, shadowStep shadowState e, None
@@ -222,7 +222,7 @@ let private buildIntervalsWithTrace (initState: (IntervalKind * DateTimeOffset) 
                 let newState =
                     match shadowState with
                     | Some (kind, _) -> Some (kind, e.TimeCreated)
-                    | None -> None
+                    | None -> Some (Paused, e.TimeCreated)
                 let reason' = nextConnectReason state newState connectReason
                 let acc' = match closed with Some iv -> iv :: acc | None -> acc
                 walk newState reason' false None acc' (trace state newState closed TimeSpan.Zero e :: traces) rest

@@ -212,6 +212,44 @@ let ``Active + Lock + PowerDown + Unlock → Active resumes (sleep ignored in sh
     intervals |> List.item 2 |> (fun i -> i.Start) |> should equal t3
 
 [<Fact>]
+let ``Active + Lock + UserDisconnect + Unlock → Paused at unlock, not None`` () =
+    // Before fix: shadow→None on userDisconnect → outward None → Initial connect (+5m)
+    // After fix:  shadow→None on userDisconnect → outward Paused → PostPause connect (no +5m)
+    let events = [
+        connectedEvent t0
+        lockEvent t1
+        userDiscEvent t2
+        unlockEvent t3
+    ]
+    let intervals = runTrace events
+    // Active closes at lock; Paused (lock→unlock) closes at unlock; new Paused opens at unlock
+    intervals |> List.item 0 |> (fun i -> i.Kind)  |> should equal Active
+    intervals |> List.item 1 |> (fun i -> i.Kind)  |> should equal Paused
+    intervals |> List.item 1 |> (fun i -> i.Start) |> should equal t1
+    intervals |> List.item 1 |> (fun i -> i.End)   |> should equal t3
+    intervals |> List.item 2 |> (fun i -> i.Kind)  |> should equal Paused
+    intervals |> List.item 2 |> (fun i -> i.Start) |> should equal t3
+
+[<Fact>]
+let ``Reconnect after lock-induced user-disconnect is PostPause, no +5m bonus`` () =
+    // First connect (Initial): +5m grace applied.
+    // Second connect after lock+userDisc+unlock: PostPause, no +5m grace.
+    let t6 = t5.AddMinutes 1.0
+    let pd = t6.AddHours 1.0
+    let events = [
+        connectEvent   t0   // None → Connecting (Initial)
+        connectedEvent t1   // Connecting(5min) closes: +5min + 5min grace = 10min report
+        lockEvent      t2   // Active → Paused
+        userDiscEvent  t3   // shadow → None
+        unlockEvent    t4   // Paused → Paused (fix: not None)
+        connectEvent   t5   // Paused → Connecting (PostPause)
+        connectedEvent t6   // Connecting(1min) closes: +1min, no grace = 1min report
+    ]
+    let stats, _ = computeWithTrace None false pd events
+    // 10min (first) + 1min (second, PostPause) = 11min total
+    stats.TotalReport |> should equal (TimeSpan.FromMinutes 11.0)
+
+[<Fact>]
 let ``No session + Lock + Connect + Connected + Unlock → Active at unlock`` () =
     let events = [
         lockEvent t1
