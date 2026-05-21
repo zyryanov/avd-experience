@@ -61,20 +61,40 @@ let nextConnectReason
     (prevState: (IntervalKind * DateTimeOffset) option)
     (nextState: (IntervalKind * DateTimeOffset) option)
     (currentReason: ConnectReason option)
+    (closedInterval: Interval option)
     : ConnectReason option =
     let prevKind = prevState |> Option.map fst
     let nextKind = nextState |> Option.map fst
+    // PostIssue expires when leaving a Paused interval of >= 3h
+    let reasonAfterLongPause =
+        match currentReason, closedInterval with
+        | Some PostIssue, Some iv when iv.Kind = Paused && (iv.End - iv.Start) >= TimeSpan.FromHours 3.0 -> None
+        | _ -> currentReason
     match nextKind with
     | Some Connecting when prevKind <> Some Connecting ->
         match prevKind with
         | None        -> Some Initial
         | Some Issue  -> Some PostIssue
+        | Some Paused ->
+            // Preserve PostIssue through a short Paused detour so Active recovery overhead still applies.
+            match reasonAfterLongPause with
+            | Some PostIssue -> Some PostIssue
+            | _              -> Some PostPause
         | _           -> Some PostPause
     | Some Connecting -> currentReason  // re-fire while already Connecting — preserve reason
     | Some Active ->
         match prevKind with
-        | Some Issue -> Some PostIssue  // direct Issue→Active (no Connecting step)
-        | _          -> currentReason   // carry forward from Connecting→Active
+        | Some Issue  -> Some PostIssue  // direct Issue→Active (no Connecting step)
+        | Some Paused -> reasonAfterLongPause  // expire PostIssue if Paused >= 3h
+        | _           -> currentReason         // carry forward from Connecting→Active
+    | Some Paused ->
+        match prevKind with
+        | Some Connecting -> currentReason   // mid-reconnect abort: preserve PostIssue for retry
+        | Some Active ->
+            match currentReason with
+            | Some PostIssue -> None         // Active(PostIssue) closed: overhead charged, consume it
+            | r              -> r
+        | _               -> reasonAfterLongPause  // Paused→Paused via unlock: check long duration
     | _ -> None
 
 let intervalReportContrib (closedKind: IntervalKind) (reason: ConnectReason option) (dur: TimeSpan) : TimeSpan =
@@ -210,7 +230,7 @@ let private buildIntervalsWithTrace (initState: (IntervalKind * DateTimeOffset) 
                     match closed with
                     | None -> TimeSpan.Zero
                     | Some iv -> intervalReportContrib iv.Kind connectReason (iv.End - iv.Start)
-                let reason' = nextConnectReason state outward connectReason
+                let reason' = nextConnectReason state outward connectReason closed
                 let acc' = match closed with Some iv -> iv :: acc | None -> acc
                 walk outward reason' true state acc' (trace state outward closed contrib e :: traces) rest
 
@@ -223,7 +243,7 @@ let private buildIntervalsWithTrace (initState: (IntervalKind * DateTimeOffset) 
                     match shadowState with
                     | Some (kind, _) -> Some (kind, e.TimeCreated)
                     | None -> Some (Paused, e.TimeCreated)
-                let reason' = nextConnectReason state newState connectReason
+                let reason' = nextConnectReason state newState connectReason closed
                 let acc' = match closed with Some iv -> iv :: acc | None -> acc
                 walk newState reason' false None acc' (trace state newState closed TimeSpan.Zero e :: traces) rest
 
@@ -237,7 +257,7 @@ let private buildIntervalsWithTrace (initState: (IntervalKind * DateTimeOffset) 
                     match closed with
                     | None    -> TimeSpan.Zero
                     | Some iv -> intervalReportContrib iv.Kind connectReason (iv.End - iv.Start)
-                let reason' = nextConnectReason state newState connectReason
+                let reason' = nextConnectReason state newState connectReason closed
                 let acc' = match closed with Some iv -> iv :: acc | None -> acc
                 walk newState reason' false None acc' (trace state newState closed contrib e :: traces) rest
 

@@ -322,43 +322,143 @@ let ``Paused returns zero`` () =
 
 [<Fact>]
 let ``None → Connecting gives Initial`` () =
-    let result = nextConnectReason None (Some (Connecting, t1)) None
+    let result = nextConnectReason None (Some (Connecting, t1)) None None
     result |> should equal (Some Initial)
 
 [<Fact>]
 let ``Issue → Connecting gives PostIssue`` () =
-    let result = nextConnectReason (Some (Issue, t0)) (Some (Connecting, t1)) None
+    let result = nextConnectReason (Some (Issue, t0)) (Some (Connecting, t1)) None None
     result |> should equal (Some PostIssue)
 
 [<Fact>]
-let ``Paused → Connecting gives PostPause`` () =
-    let result = nextConnectReason (Some (Paused, t0)) (Some (Connecting, t1)) None
+let ``Paused → Connecting gives PostPause when no prior reason`` () =
+    let result = nextConnectReason (Some (Paused, t0)) (Some (Connecting, t1)) None None
     result |> should equal (Some PostPause)
 
 [<Fact>]
 let ``Active → Connecting gives PostPause`` () =
-    let result = nextConnectReason (Some (Active, t0)) (Some (Connecting, t1)) None
+    let result = nextConnectReason (Some (Active, t0)) (Some (Connecting, t1)) None None
     result |> should equal (Some PostPause)
 
 [<Fact>]
 let ``Connecting → Connecting preserves current reason`` () =
-    let result = nextConnectReason (Some (Connecting, t0)) (Some (Connecting, t1)) (Some PostIssue)
+    let result = nextConnectReason (Some (Connecting, t0)) (Some (Connecting, t1)) (Some PostIssue) None
     result |> should equal (Some PostIssue)
 
 [<Fact>]
 let ``Issue → Active directly gives PostIssue`` () =
-    let result = nextConnectReason (Some (Issue, t0)) (Some (Active, t1)) (Some PostIssue)
+    let result = nextConnectReason (Some (Issue, t0)) (Some (Active, t1)) (Some PostIssue) None
     result |> should equal (Some PostIssue)
 
 [<Fact>]
 let ``Connecting → Active carries forward reason`` () =
-    let result = nextConnectReason (Some (Connecting, t0)) (Some (Active, t1)) (Some PostPause)
+    let result = nextConnectReason (Some (Connecting, t0)) (Some (Active, t1)) (Some PostPause) None
     result |> should equal (Some PostPause)
 
 [<Fact>]
-let ``transition to Paused clears reason`` () =
-    let result = nextConnectReason (Some (Active, t0)) (Some (Paused, t1)) (Some PostIssue)
+let ``Active → Paused with PostIssue clears reason (overhead consumed)`` () =
+    let result = nextConnectReason (Some (Active, t0)) (Some (Paused, t1)) (Some PostIssue) None
     result |> should equal None
+
+[<Fact>]
+let ``Active → Paused with non-PostIssue reason preserves it`` () =
+    let result = nextConnectReason (Some (Active, t0)) (Some (Paused, t1)) (Some PostPause) None
+    result |> should equal (Some PostPause)
+
+[<Fact>]
+let ``Connecting → Paused preserves PostIssue (mid-reconnect abort)`` () =
+    let result = nextConnectReason (Some (Connecting, t0)) (Some (Paused, t1)) (Some PostIssue) None
+    result |> should equal (Some PostIssue)
+
+[<Fact>]
+let ``Paused → Active with PostIssue and short Paused (<3h) preserves reason`` () =
+    let shortIv = Some { Kind = Paused; Start = t0; End = t0.AddHours 1.0 }
+    let result = nextConnectReason (Some (Paused, t0)) (Some (Active, t1)) (Some PostIssue) shortIv
+    result |> should equal (Some PostIssue)
+
+[<Fact>]
+let ``Paused → Active with PostIssue and long Paused (≥3h) expires reason`` () =
+    let longIv = Some { Kind = Paused; Start = t0; End = t0.AddHours 4.0 }
+    let result = nextConnectReason (Some (Paused, t0)) (Some (Active, t1)) (Some PostIssue) longIv
+    result |> should equal None
+
+[<Fact>]
+let ``Paused → Connecting with PostIssue and short Paused (<3h) gives PostIssue`` () =
+    let shortIv = Some { Kind = Paused; Start = t0; End = t0.AddHours 1.0 }
+    let result = nextConnectReason (Some (Paused, t0)) (Some (Connecting, t1)) (Some PostIssue) shortIv
+    result |> should equal (Some PostIssue)
+
+[<Fact>]
+let ``Paused → Connecting with PostIssue and long Paused (≥3h) gives PostPause`` () =
+    let longIv = Some { Kind = Paused; Start = t0; End = t0.AddHours 4.0 }
+    let result = nextConnectReason (Some (Paused, t0)) (Some (Connecting, t1)) (Some PostIssue) longIv
+    result |> should equal (Some PostPause)
+
+[<Fact>]
+let ``Paused → Connecting at exactly 3h boundary gives PostPause`` () =
+    let edgeIv = Some { Kind = Paused; Start = t0; End = t0.AddHours 3.0 }
+    let result = nextConnectReason (Some (Paused, t0)) (Some (Connecting, t1)) (Some PostIssue) edgeIv
+    result |> should equal (Some PostPause)
+
+[<Fact>]
+let ``Issue drop then short Paused detour: Active gets PostIssue recovery overhead`` () =
+    // Sequence: Active→Issue(5m)→Connecting(5m, PostIssue)→Paused(5m, <3h)→Connecting(10m, PostIssue preserved)→Active(10m)→Paused
+    // Expected report: Issue 5m + Connecting 5m + Connecting 10m + Active(PostIssue, 10m) = 30m
+    let t6 = t5.AddMinutes 10.0
+    let pd = t6.AddMinutes 1.0
+    let events = [
+        connectedEvent t0           // None → Active
+        watchdogEvent  t1           // Active(5m) → Issue
+        connectEvent   t2           // Issue(5m) → Connecting  [PostIssue]
+        userDiscEvent  t3           // Connecting(5m) → Paused  [reason preserved=PostIssue]
+        connectEvent   t4           // Paused(5m, <3h, PostIssue) → Connecting  [PostIssue preserved]
+        connectedEvent t5           // Connecting(10m) → Active  [PostIssue preserved]
+        userDiscEvent  t6           // Active(10m, PostIssue) → Paused: +10m report
+    ]
+    let stats, _ = computeWithTrace None false pd events
+    stats.TotalReport |> should equal (TimeSpan.FromMinutes 30.0)
+
+[<Fact>]
+let ``Issue drop then long Paused detour (≥3h): Active gets PostPause, no recovery overhead`` () =
+    // Paused ≥ 3h → reason resets to PostPause → Active gets 0 overhead
+    // Expected report: Issue 5m + Connecting 5m + Connecting 10m = 20m (no Active overhead)
+    let tLong   = t3.AddHours 4.0
+    let tConn2  = tLong.AddMinutes 10.0
+    let tActive = tLong.AddMinutes 20.0
+    let pd      = tActive.AddMinutes 1.0
+    let events = [
+        connectedEvent t0
+        watchdogEvent  t1           // Active(5m) → Issue
+        connectEvent   t2           // Issue(5m) → Connecting  [PostIssue]
+        userDiscEvent  t3           // Connecting(5m) → Paused
+        connectEvent   tLong        // Paused(4h, ≥3h) → Connecting  [PostPause — reason reset]
+        connectedEvent tConn2       // Connecting(10m) → Active  [PostPause]
+        userDiscEvent  tActive      // Active(10m, PostPause) → Paused: +0
+    ]
+    let stats, _ = computeWithTrace None false pd events
+    stats.TotalReport |> should equal (TimeSpan.FromMinutes 20.0)
+
+[<Fact>]
+let ``PostIssue does not persist through lock/unlock cycles after first Active session`` () =
+    // Issue → connect → Active(PostIssue, 5m, +5m) → lock → unlock → Active(no PostIssue, 5m, +0) → lock
+    // Expected: Issue 5m + Connecting 5m + Active(PostIssue, 5m) = 15m
+    let t6 = t5.AddMinutes 5.0
+    let t7 = t6.AddMinutes 5.0
+    let t8 = t7.AddMinutes 10.0
+    let pd = t8.AddMinutes 1.0
+    let events = [
+        connectedEvent t0           // Active
+        watchdogEvent  t1           // Active(5m) → Issue
+        connectEvent   t2           // Issue(5m) → Connecting [PostIssue]
+        connectedEvent t3           // Connecting(5m) → Active [PostIssue]
+        lockEvent      t4           // Active(5m, PostIssue) → Paused: +5m; PostIssue consumed
+        unlockEvent    t5           // Paused(10m) → Active [reason=None]
+        lockEvent      t6           // Active(5m, no PostIssue) → Paused: +0
+        unlockEvent    t7           // Paused(5m) → Active [reason=None]
+        userDiscEvent  t8           // Active(10m, no PostIssue) → Paused: +0
+    ]
+    let stats, _ = computeWithTrace None false pd events
+    stats.TotalReport |> should equal (TimeSpan.FromMinutes 15.0)
 
 // ── splitByDay ────────────────────────────────────────────────────────────────
 

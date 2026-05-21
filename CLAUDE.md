@@ -31,14 +31,14 @@ EventLog.fs   — Windows Event Log I/O; queryEvents, queryByTimeRange, querySys
                 queryLockEvents, makeIdXPath, subscribeChannel (for monitor mode)
 Events.fs     — Event-ID domain knowledge; classifiers (isPowerDown, isPowerResume,
                 isConnectInitiated, isConnected, isDisconnected, isUserDisconnected,
-                isConnectionCanceled, isWorkstationLocked, isWorkstationUnlocked, isRelevant);
-                marker (id→CSV label string); knownNoMarker set
+                isConnectionCanceled, isThreadWatchdog, isWorkstationLocked, isWorkstationUnlocked,
+                isRelevant); marker (id→CSV label string); knownNoMarker set
 CsvExport.fs  — Serialize traces → events CSV (writeEventsCsv) and intervals → intervals CSV
                 (writeIntervalsCsv); returns unknown event IDs for warnings
-Stats.fs      — State machine (stepState) builds Active/Connecting/Paused/Issue intervals;
-                nextConnectReason tracks ConnectReason across transitions; intervalReportContrib
-                computes disruption cost per closed interval; computeWithTrace aggregates into
-                DayStats/PeriodStats and splits intervals by day via splitByDay
+Stats.fs      — State machine: stepState (unlocked path) + shadowStep (AVD events during lock) +
+                advanceState (routes by locked/unlock/normal); nextConnectReason tracks ConnectReason
+                across transitions; intervalReportContrib computes disruption cost per closed interval;
+                computeWithTrace aggregates into DayStats/PeriodStats and splits intervals by day via splitByDay
 Report.fs     — Spectre.Console colored table (printStats); state-change trace log (printTrace);
                 format helpers (fmtTime, formatDuration, stateMarkup, stateColor)
 Program.fs    — CLI arg parsing (Argu); runMonitor for live event subscription (bootstrapState
@@ -82,10 +82,10 @@ Key types:
 |------|---------|-------------|
 | `Active` | Session live | `isConnected` (1027) |
 | `Connecting` | Handshake in progress | `isConnectInitiated` (1024/1102) |
-| `Paused` | User-initiated stop | `isPowerDown`, `isWorkstationLocked` (4800), `isUserDisconnected` (1026 reason 1/2), `isDisconnected` while workstation locked |
-| `Issue` | Unexpected drop | `isDisconnected` (1026) while workstation **not** locked and reason ≠ 1/2 |
+| `Paused` | User-initiated stop | `isPowerDown`, `isWorkstationLocked` (4800), `isUserDisconnected` (1026 reason 1/2/3), `isDisconnected` while workstation locked |
+| `Issue` | Unexpected drop | `isDisconnected` (1026) or `isThreadWatchdog` (1033) while workstation **not** locked and reason ≠ 1/2/3 |
 
-Note: `stepState` carries a `locked: bool` flag (updated by 4800/4801 events). A disconnect while locked → `Paused`; otherwise → `Issue`.
+Note: `advanceState` routes events by `locked` flag (updated by 4800/4801). While locked, AVD events advance `shadowStep` without generating outward intervals. On unlock, shadow determines new state: `Active` if session survived, `Paused` if dropped (reconnect = `PostPause`), `None` if user-disconnected.
 
 ## Report Column (Disruption Cost)
 

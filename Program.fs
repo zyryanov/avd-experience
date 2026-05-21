@@ -87,7 +87,7 @@ let private runMonitor () : int =
                 match closed with
                 | Some iv -> intervalReportContrib iv.Kind connectReason.Value (iv.End - iv.Start)
                 | None    -> TimeSpan.Zero
-            connectReason.Value <- nextConnectReason before after connectReason.Value
+            connectReason.Value <- nextConnectReason before after connectReason.Value closed
             if after <> before then
                 let ts = e.TimeCreated.LocalDateTime.ToString("HH:mm:ss")
                 let durStr =
