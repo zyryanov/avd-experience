@@ -219,47 +219,14 @@ let private buildIntervalsWithTrace (initState: (IntervalKind * DateTimeOffset) 
                 List.rev (closed :: acc), List.rev traces
             | None -> List.rev acc, List.rev traces
         | e :: rest ->
-            if isWorkstationLocked e && not locked then
-                let outward, closed =
-                    match state with
-                    | Some ((Active | Connecting | Issue) as kind, t) ->
-                        Some (Paused, e.TimeCreated),
-                        Some { Kind = kind; Start = t; End = e.TimeCreated }
-                    | _ -> state, None
-                let contrib =
-                    match closed with
-                    | None -> TimeSpan.Zero
-                    | Some iv -> intervalReportContrib iv.Kind connectReason (iv.End - iv.Start)
-                let reason' = nextConnectReason state outward connectReason closed
-                let acc' = match closed with Some iv -> iv :: acc | None -> acc
-                walk outward reason' true state acc' (trace state outward closed contrib e :: traces) rest
-
-            elif isWorkstationUnlocked e && locked then
-                let closed =
-                    match state with
-                    | Some (Paused, t) -> Some { Kind = Paused; Start = t; End = e.TimeCreated }
-                    | _ -> None
-                let newState =
-                    match shadowState with
-                    | Some (kind, _) -> Some (kind, e.TimeCreated)
-                    | None -> Some (Paused, e.TimeCreated)
-                let reason' = nextConnectReason state newState connectReason closed
-                let acc' = match closed with Some iv -> iv :: acc | None -> acc
-                walk newState reason' false None acc' (trace state newState closed TimeSpan.Zero e :: traces) rest
-
-            elif locked then
-                let shadow' = shadowStep shadowState e
-                walk state connectReason true shadow' acc (trace state state None TimeSpan.Zero e :: traces) rest
-
-            else
-                let newState, closed = stepState state e
-                let contrib =
-                    match closed with
-                    | None    -> TimeSpan.Zero
-                    | Some iv -> intervalReportContrib iv.Kind connectReason (iv.End - iv.Start)
-                let reason' = nextConnectReason state newState connectReason closed
-                let acc' = match closed with Some iv -> iv :: acc | None -> acc
-                walk newState reason' false None acc' (trace state newState closed contrib e :: traces) rest
+            let newState, lk', shadow', closed = advanceState state locked shadowState e
+            let contrib =
+                match closed with
+                | None    -> TimeSpan.Zero
+                | Some iv -> intervalReportContrib iv.Kind connectReason (iv.End - iv.Start)
+            let reason' = nextConnectReason state newState connectReason closed
+            let acc' = match closed with Some iv -> iv :: acc | None -> acc
+            walk newState reason' lk' shadow' acc' (trace state newState closed contrib e :: traces) rest
 
     walk initState None initLocked initState [] [] events
 
