@@ -48,7 +48,7 @@ let ``computeWithTrace: ByDay sums equal period totals for any session duration`
         // pd in 2025 → effectiveEnd = pd (deterministic, in the past)
         let pd     = baseT.AddHours(float durationHours + 1.0)
         let events = [ rdpEventAt 1027 baseT; makeEventAt 1026 "" ["x";"1"] (baseT.AddHours(float durationHours)) ]
-        let stats, _ = computeWithTrace None false pd events
+        let stats, _ = computeWithTrace None false None pd events
         let sumActive = stats.ByDay |> List.sumBy (fun d -> d.ActiveTime.TotalSeconds)
         let sumPaused = stats.ByDay |> List.sumBy (fun d -> d.PausedTime.TotalSeconds)
         abs(sumActive - stats.TotalActive.TotalSeconds) < 0.01 &&
@@ -74,6 +74,6 @@ let ``computeWithTrace: all intervals have non-negative duration`` () =
                 | 4 -> makeEventAt 4800 "Microsoft-Windows-Security-Auditing" [] t
                 | 5 -> makeEventAt 4801 "Microsoft-Windows-Security-Auditing" [] t
                 | _ -> makeEventAt 42 "Microsoft-Windows-Kernel-Power" [] t)
-        let _, trace = computeWithTrace None false pd events
+        let _, trace = computeWithTrace None false None pd events
         trace.Intervals |> List.forall (fun i -> i.End >= i.Start)
     Check.QuickThrowOnFailure prop

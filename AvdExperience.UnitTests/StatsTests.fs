@@ -145,7 +145,7 @@ let ``PowerDown while Paused → no change`` () =
 
 let runTrace events =
     let periodEnd = DateTimeOffset.MaxValue
-    let _, tr = computeWithTrace None false periodEnd events
+    let _, tr = computeWithTrace None false None periodEnd events
     tr.Intervals
 
 [<Fact>]
@@ -245,7 +245,7 @@ let ``Reconnect after lock-induced user-disconnect is PostPause, no +5m bonus`` 
         connectEvent   t5   // Paused → Connecting (PostPause)
         connectedEvent t6   // Connecting(1min) closes: +1min, no grace = 1min report
     ]
-    let stats, _ = computeWithTrace None false pd events
+    let stats, _ = computeWithTrace None false None pd events
     // 10min (first) + 1min (second, PostPause) = 11min total
     stats.TotalReport |> should equal (TimeSpan.FromMinutes 11.0)
 
@@ -415,7 +415,7 @@ let ``Issue drop then short Paused detour: Active gets PostIssue recovery overhe
         connectedEvent t5           // Connecting(10m) → Active  [PostIssue preserved]
         userDiscEvent  t6           // Active(10m, PostIssue) → Paused: +10m report
     ]
-    let stats, _ = computeWithTrace None false pd events
+    let stats, _ = computeWithTrace None false None pd events
     stats.TotalReport |> should equal (TimeSpan.FromMinutes 30.0)
 
 [<Fact>]
@@ -435,7 +435,7 @@ let ``Issue drop then long Paused detour (≥3h): Active gets PostPause, no reco
         connectedEvent tConn2       // Connecting(10m) → Active  [PostPause]
         userDiscEvent  tActive      // Active(10m, PostPause) → Paused: +0
     ]
-    let stats, _ = computeWithTrace None false pd events
+    let stats, _ = computeWithTrace None false None pd events
     stats.TotalReport |> should equal (TimeSpan.FromMinutes 20.0)
 
 [<Fact>]
@@ -457,7 +457,43 @@ let ``PostIssue does not persist through lock/unlock cycles after first Active s
         unlockEvent    t7           // Paused(5m) → Active [reason=None]
         userDiscEvent  t8           // Active(10m, no PostIssue) → Paused: +0
     ]
-    let stats, _ = computeWithTrace None false pd events
+    let stats, _ = computeWithTrace None false None pd events
+    stats.TotalReport |> should equal (TimeSpan.FromMinutes 15.0)
+
+// ── initReason propagation (cross-window PostIssue) ──────────────────────────
+
+[<Fact>]
+let ``initReason PostIssue: Active close contributes up to 15 min`` () =
+    // Simulates query starting mid-session: state=Active(t0), reason=PostIssue already set.
+    // Lock event at t1 closes Active(5min) with PostIssue → should get +5min report.
+    let events = [ lockEvent t1 ]
+    let initState = Some (Active, t0)
+    let pd = t2
+    let stats, _ = computeWithTrace initState false (Some PostIssue) pd events
+    stats.TotalReport |> should equal (t1 - t0)
+
+[<Fact>]
+let ``initReason None: Active close contributes zero`` () =
+    // Same scenario but no initReason → no recovery overhead.
+    let events = [ lockEvent t1 ]
+    let initState = Some (Active, t0)
+    let pd = t2
+    let stats, _ = computeWithTrace initState false None pd events
+    stats.TotalReport |> should equal TimeSpan.Zero
+
+[<Fact>]
+let ``initReason PostIssue: Active crossing midnight, query starts day 2, gets +15m`` () =
+    // Exact reproduction of the reported bug:
+    //   - Session reconnected after issue at 23:25 on day 1 (PostIssue)
+    //   - Query starts at midnight (day 2); initState=Active(midnight), initReason=PostIssue
+    //   - Lock event fires 00:28 on day 2 → closes 28min Active with PostIssue → +15m capped
+    let localOffset = TimeZoneInfo.Local.GetUtcOffset(DateTime(2025, 5, 20))
+    let midnight    = DateTimeOffset(2025, 5, 20, 0, 0, 0, localOffset)
+    let lockAt      = midnight.AddMinutes 28.0
+    let pd          = midnight.AddHours 2.0
+    let events      = [ makeEventAt 4800 "Microsoft-Windows-Security-Auditing" [] lockAt ]
+    let initState   = Some (Active, midnight)
+    let stats, _    = computeWithTrace initState false (Some PostIssue) pd events
     stats.TotalReport |> should equal (TimeSpan.FromMinutes 15.0)
 
 // ── splitByDay ────────────────────────────────────────────────────────────────

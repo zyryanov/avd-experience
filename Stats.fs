@@ -199,7 +199,7 @@ let advanceState
         let newState, closed = stepState state e
         newState, false, None, closed
 
-let private buildIntervalsWithTrace (initState: (IntervalKind * DateTimeOffset) option) (initLocked: bool) (periodEnd: DateTimeOffset) (events: LogEvent list) : Interval list * EventTrace list =
+let private buildIntervalsWithTrace (initState: (IntervalKind * DateTimeOffset) option) (initLocked: bool) (initReason: ConnectReason option) (periodEnd: DateTimeOffset) (events: LogEvent list) : Interval list * EventTrace list =
     let effectiveEnd = min periodEnd DateTimeOffset.Now
 
     let trace stateBefore stateAfter closed contribution (e: LogEvent) =
@@ -228,16 +228,16 @@ let private buildIntervalsWithTrace (initState: (IntervalKind * DateTimeOffset) 
             let acc' = match closed with Some iv -> iv :: acc | None -> acc
             walk newState reason' lk' shadow' acc' (trace state newState closed contrib e :: traces) rest
 
-    walk initState None initLocked initState [] [] events
+    walk initState initReason initLocked initState [] [] events
 
-let computeWithTrace (initState: (IntervalKind * DateTimeOffset) option) (initLocked: bool) (periodEnd: DateTimeOffset) (events: LogEvent list) : PeriodStats * TraceResult =
+let computeWithTrace (initState: (IntervalKind * DateTimeOffset) option) (initLocked: bool) (initReason: ConnectReason option) (periodEnd: DateTimeOffset) (events: LogEvent list) : PeriodStats * TraceResult =
     if events.IsEmpty then
         let empty = { ByDay = []; TotalActive = TimeSpan.Zero; TotalConnecting = TimeSpan.Zero; TotalPaused = TimeSpan.Zero; TotalIssue = TimeSpan.Zero; TotalIssueCount = 0; TotalReport = TimeSpan.Zero }
         let emptyTrace = { Intervals = []; EventTraces = []; IntervalSlices = [] }
         empty, emptyTrace
     else
         let events = events |> List.sortBy (fun e -> e.TimeCreated)
-        let intervals, eventTraces = buildIntervalsWithTrace initState initLocked periodEnd events
+        let intervals, eventTraces = buildIntervalsWithTrace initState initLocked initReason periodEnd events
 
         let slices =
             intervals
