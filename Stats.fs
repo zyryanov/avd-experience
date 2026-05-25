@@ -76,10 +76,15 @@ let nextConnectReason
         | None        -> Some Initial
         | Some Issue  -> Some PostIssue
         | Some Paused ->
-            // Preserve PostIssue through a short Paused detour so Active recovery overhead still applies.
-            match reasonAfterLongPause with
-            | Some PostIssue -> Some PostIssue
-            | _              -> Some PostPause
+            let longPause =
+                closedInterval
+                |> Option.exists (fun iv -> iv.Kind = Paused && iv.End - iv.Start >= TimeSpan.FromHours 3.0)
+            if longPause then Some Initial
+            else
+                // Preserve PostIssue through a short Paused detour so Active recovery overhead still applies.
+                match reasonAfterLongPause with
+                | Some PostIssue -> Some PostIssue
+                | _              -> Some PostPause
         | _           -> Some PostPause
     | Some Connecting -> currentReason  // re-fire while already Connecting — preserve reason
     | Some Active ->
@@ -191,7 +196,12 @@ let advanceState
         outward, true, state, closed
     elif isWorkstationUnlocked e && locked then
         let closed = match state with Some (Paused, t) -> Some { Kind = Paused; Start = t; End = e.TimeCreated } | _ -> None
-        let newState = match shadowState with Some (kind, _) -> Some (kind, e.TimeCreated) | None -> Some (Paused, e.TimeCreated)
+        let longPause = closed |> Option.exists (fun iv -> iv.End - iv.Start >= TimeSpan.FromHours 3.0)
+        let newState =
+            match shadowState with
+            | Some (kind, _) when longPause && (kind = Issue || kind = Connecting) -> Some (Paused, e.TimeCreated)
+            | Some (kind, _) -> Some (kind, e.TimeCreated)
+            | None -> Some (Paused, e.TimeCreated)
         newState, false, None, closed
     elif locked then
         state, true, shadowStep shadowState e, None
@@ -236,7 +246,10 @@ let computeWithTrace (initState: (IntervalKind * DateTimeOffset) option) (initLo
         let emptyTrace = { Intervals = []; EventTraces = []; IntervalSlices = [] }
         empty, emptyTrace
     else
-        let events = events |> List.sortBy (fun e -> e.TimeCreated)
+        let events =
+            events
+            |> List.sortBy (fun e -> e.TimeCreated)
+            |> List.filter (fun e -> e.TimeCreated <= periodEnd)
         let intervals, eventTraces = buildIntervalsWithTrace initState initLocked initReason periodEnd events
 
         let slices =

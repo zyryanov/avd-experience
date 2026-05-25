@@ -250,6 +250,30 @@ let ``Reconnect after lock-induced user-disconnect is PostPause, no +5m bonus`` 
     stats.TotalReport |> should equal (TimeSpan.FromMinutes 11.0)
 
 [<Fact>]
+let ``Issue + Lock (short) + Unlock → resumes as Issue`` () =
+    let unlockShort = t2.AddMinutes 30.0
+    let events = [
+        connectedEvent t0
+        watchdogEvent  t1   // Active → Issue
+        lockEvent      t2   // Issue → Paused, shadow=Issue
+        unlockEvent    unlockShort   // short Paused (<3h) → Issue resumes
+    ]
+    let intervals = runTrace events
+    intervals |> List.map (fun i -> i.Kind) |> should equal [ Active; Issue; Paused; Issue ]
+
+[<Fact>]
+let ``Issue + Lock (≥3h) + Unlock → Paused, not Issue`` () =
+    let unlockLong = t2.AddHours 4.0
+    let events = [
+        connectedEvent t0
+        watchdogEvent  t1   // Active → Issue
+        lockEvent      t2   // Issue → Paused, shadow=Issue
+        unlockEvent    unlockLong   // long Paused (≥3h) → stale Issue reset to Paused
+    ]
+    let intervals = runTrace events
+    intervals |> List.map (fun i -> i.Kind) |> should equal [ Active; Issue; Paused; Paused ]
+
+[<Fact>]
 let ``No session + Lock + Connect + Connected + Unlock → Active at unlock`` () =
     let events = [
         lockEvent t1
@@ -389,16 +413,22 @@ let ``Paused → Connecting with PostIssue and short Paused (<3h) gives PostIssu
     result |> should equal (Some PostIssue)
 
 [<Fact>]
-let ``Paused → Connecting with PostIssue and long Paused (≥3h) gives PostPause`` () =
+let ``Paused → Connecting with PostIssue and long Paused (≥3h) gives Initial`` () =
     let longIv = Some { Kind = Paused; Start = t0; End = t0.AddHours 4.0 }
     let result = nextConnectReason (Some (Paused, t0)) (Some (Connecting, t1)) (Some PostIssue) longIv
-    result |> should equal (Some PostPause)
+    result |> should equal (Some Initial)
 
 [<Fact>]
-let ``Paused → Connecting at exactly 3h boundary gives PostPause`` () =
+let ``Paused → Connecting with no reason and long Paused (≥3h) gives Initial`` () =
+    let longIv = Some { Kind = Paused; Start = t0; End = t0.AddHours 4.0 }
+    let result = nextConnectReason (Some (Paused, t0)) (Some (Connecting, t1)) None longIv
+    result |> should equal (Some Initial)
+
+[<Fact>]
+let ``Paused → Connecting at exactly 3h boundary gives Initial`` () =
     let edgeIv = Some { Kind = Paused; Start = t0; End = t0.AddHours 3.0 }
     let result = nextConnectReason (Some (Paused, t0)) (Some (Connecting, t1)) (Some PostIssue) edgeIv
-    result |> should equal (Some PostPause)
+    result |> should equal (Some Initial)
 
 [<Fact>]
 let ``Issue drop then short Paused detour: Active gets PostIssue recovery overhead`` () =
@@ -419,9 +449,9 @@ let ``Issue drop then short Paused detour: Active gets PostIssue recovery overhe
     stats.TotalReport |> should equal (TimeSpan.FromMinutes 30.0)
 
 [<Fact>]
-let ``Issue drop then long Paused detour (≥3h): Active gets PostPause, no recovery overhead`` () =
-    // Paused ≥ 3h → reason resets to PostPause → Active gets 0 overhead
-    // Expected report: Issue 5m + Connecting 5m + Connecting 10m = 20m (no Active overhead)
+let ``Issue drop then long Paused detour (≥3h): reconnect is Initial, gets +5m grace`` () =
+    // Paused ≥ 3h → reason resets to Initial → Connecting(10m) gets +5m grace
+    // Expected report: Issue 5m + Connecting 5m (PostIssue) + Connecting 10m+5grace (Initial) = 25m
     let tLong   = t3.AddHours 4.0
     let tConn2  = tLong.AddMinutes 10.0
     let tActive = tLong.AddMinutes 20.0
@@ -431,12 +461,12 @@ let ``Issue drop then long Paused detour (≥3h): Active gets PostPause, no reco
         watchdogEvent  t1           // Active(5m) → Issue
         connectEvent   t2           // Issue(5m) → Connecting  [PostIssue]
         userDiscEvent  t3           // Connecting(5m) → Paused
-        connectEvent   tLong        // Paused(4h, ≥3h) → Connecting  [PostPause — reason reset]
-        connectedEvent tConn2       // Connecting(10m) → Active  [PostPause]
-        userDiscEvent  tActive      // Active(10m, PostPause) → Paused: +0
+        connectEvent   tLong        // Paused(4h, ≥3h) → Connecting  [Initial — new connection]
+        connectedEvent tConn2       // Connecting(10m) → Active  [Initial]
+        userDiscEvent  tActive      // Active(10m, Initial) → Paused: +0
     ]
     let stats, _ = computeWithTrace None false None pd events
-    stats.TotalReport |> should equal (TimeSpan.FromMinutes 20.0)
+    stats.TotalReport |> should equal (TimeSpan.FromMinutes 25.0)
 
 [<Fact>]
 let ``PostIssue does not persist through lock/unlock cycles after first Active session`` () =
@@ -459,6 +489,25 @@ let ``PostIssue does not persist through lock/unlock cycles after first Active s
     ]
     let stats, _ = computeWithTrace None false None pd events
     stats.TotalReport |> should equal (TimeSpan.FromMinutes 15.0)
+
+[<Fact>]
+let ``Clean session + 3h+ pause + reconnect: both Connecting intervals get Initial grace`` () =
+    // connect(t0)→connected(t1, 5m Connecting Initial+5grace=10m)→userDisc(t2)
+    // →connect(t2+4h, 4h Paused closes, Initial)→connected(t2+4h+10m, 10m Connecting Initial+5grace=15m)
+    // TotalReport = 10m + 15m = 25m
+    let tPause   = t2
+    let tConn2   = tPause.AddHours 4.0
+    let tActive2 = tConn2.AddMinutes 10.0
+    let pd       = tActive2.AddMinutes 1.0
+    let events = [
+        connectEvent   t0
+        connectedEvent t1
+        userDiscEvent  tPause
+        connectEvent   tConn2
+        connectedEvent tActive2
+    ]
+    let stats, _ = computeWithTrace None false None pd events
+    stats.TotalReport |> should equal (TimeSpan.FromMinutes 25.0)
 
 // ── initReason propagation (cross-window PostIssue) ──────────────────────────
 

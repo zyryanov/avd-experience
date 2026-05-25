@@ -11,14 +11,14 @@ open AvdStats.Report
 
 type Args =
     | [<AltCommandLine("-s", "--from")>] Start of string
-    | [<AltCommandLine("-e", "--to")>]   End of string
+    | [<AltCommandLine("-t", "--to")>]   End of string
     | [<AltCommandLine("-m")>] Monitor
     | [<AltCommandLine("-c")>] Csv
     interface IArgParserTemplate with
         member x.Usage =
             match x with
             | Start _ -> "start date, inclusive (yyyy-MM-dd); alias --from / -s. Default: start of today."
-            | End _   -> "end date, inclusive (yyyy-MM-dd); alias --to / -e. Default: end of today."
+            | End _   -> "end date, inclusive (yyyy-MM-dd); alias --to / -t. Default: end of today."
             | Monitor -> "watch live event log for AVD state changes; prints each transition with timestamp and duration"
             | Csv     -> "export events and intervals to CSV files (off by default)"
 
