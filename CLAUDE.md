@@ -85,7 +85,7 @@ Key types:
 | `Paused` | User-initiated stop | `isPowerDown`, `isWorkstationLocked` (4800), `isUserDisconnected` (1026 reason 1/2/3), `isDisconnected` while workstation locked |
 | `Issue` | Unexpected drop | `isDisconnected` (1026) or `isThreadWatchdog` (1033) while workstation **not** locked and reason ≠ 1/2/3 |
 
-Note: `advanceState` routes events by `locked` flag (updated by 4800/4801). While locked, AVD events advance `shadowStep` without generating outward intervals. On unlock, shadow determines new state: `Active` if session survived, `Paused` if dropped (reconnect = `PostPause`), `None` if user-disconnected.
+Note: `advanceState` routes events by `locked` flag (updated by 4800/4801). While locked, AVD events advance `shadowStep` without generating outward intervals. On unlock, shadow determines new state: `Active` if session survived, `Paused` if dropped (reconnect = `PostPause`), `None` if user-disconnected. Exception: if the lock-induced Paused interval was ≥ 3h, shadow `Issue` or `Connecting` is reset to `Paused` (stale state discarded).
 
 ## Report Column (Disruption Cost)
 
@@ -95,13 +95,15 @@ Note: `advanceState` routes events by `locked` flag (updated by 4800/4801). Whil
 - `Active` after `PostIssue` reconnect → up to 15 min (recovery overhead)
 - `Paused` → zero
 
+`ConnectReason = Initial` applies when: no prior session (`None → Connecting`), or previous `Paused` interval was ≥ 3h (long absence = fresh start). `PostIssue` is preserved through short Paused detours (< 3h) so recovery overhead still applies after brief interruptions.
+
 Aggregated into `ReportTime` per day and `TotalReport` for the period.
 
 ## CLI Args
 
 ```
 --start / -s / --from  <yyyy-MM-dd>   start date inclusive (default: today)
---end   / -e / --to    <yyyy-MM-dd>   end date inclusive   (default: today)
+--end   / -t / --to    <yyyy-MM-dd>   end date inclusive   (default: today)
 --monitor / -m                        live mode: watch event log, print each transition
 --csv   / -c                          export events and intervals to CSV files
 ```

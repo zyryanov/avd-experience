@@ -2,8 +2,18 @@ name: CI
 
 on:
   pull_request:
+    paths:
+      - '**/*.fs'
+      - '**/*.fsproj'
+      - 'TrimmerRoots.xml'
+      - 'app.manifest'
   push:
     branches: [main]
+    paths:
+      - '**/*.fs'
+      - '**/*.fsproj'
+      - 'TrimmerRoots.xml'
+      - 'app.manifest'
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -20,8 +30,8 @@ jobs:
         with:
           dotnet-version: '10.x'
 
-      - name: Test
+      - name: Unit Tests
         run: dotnet test AvdExperience.UnitTests
 
-      - name: Integration Test
+      - name: Integration Tests
         run: dotnet test AvdExperience.IntegrationTests

@@ -33,7 +33,7 @@ dotnet test AvdExperience.IntegrationTests
 | Flag | Aliases | Default | Description |
 |------|---------|---------|-------------|
 | `--start` | `-s`, `--from` | today | Start date, inclusive (`yyyy-MM-dd`) |
-| `--end` | `-e`, `--to` | today | End date, inclusive (`yyyy-MM-dd`) |
+| `--end` | `-t`, `--to` | today | End date, inclusive (`yyyy-MM-dd`) |
 | `--monitor` | `-m` | — | Watch live event log; print each state transition with timestamp and duration |
 | `--csv` | `-c` | off | Export raw events and intervals to CSV files |
 
@@ -48,7 +48,7 @@ Output: console table grouped by day + period totals.
 | Paused | User-initiated stop (lock, disconnect) |
 | Issue | Unexpected drop (reconnect needed) |
 | Issues# | Count of unexpected drops |
-| Report | Estimated disruption cost: Connecting time + Issue time + up to 15 min context-switch penalty per post-issue reconnect + 5 min grace on the first connect of the day (profile load overhead) |
+| Report | Estimated disruption cost: Connecting time + Issue time + up to 15 min context-switch penalty per post-issue reconnect + 5 min grace on fresh connects (first of the day or after 3h+ pause) |
 
 **Report** is the key metric for productivity impact — it answers "how much time did AVD problems actually cost me?"
 
