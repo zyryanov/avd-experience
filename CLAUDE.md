@@ -51,6 +51,10 @@ PerfMonitor.fs— Live resource sampling; createCounters builds whole-VM "_Total
                 auto-discovered via tryCreateRdpCounters); sample → PerfSample;
                 pure helpers sparkBar / sparkBarScaled / sparkline / sparklineScaled /
                 pushSample / average / peak
+Teams.fs      — MessageCard payload builder (buildSummary: PerfSample summary → JSON);
+                minimal .env parser (parseDotenv / loadDotenv); HttpClient factory
+                (createClient — bypasses cert validation for corp SSL inspection);
+                fire-and-forget POST (postAsync) to Power Automate webhook
 Report.fs     — Spectre.Console colored table (printStats); state-change trace log (printTrace);
                 printSpecs (spec table); perfRenderable (live usage table w/ sparklines);
                 format helpers (fmtTime, formatDuration, stateMarkup, stateColor)
@@ -122,11 +126,21 @@ Aggregated into `ReportTime` per day and `TotalReport` for the period.
 --specs / -i                          print host hardware spec (CPU/RAM/disks) and exit
 --perf  / -p                          live mode: sample whole-VM CPU/RAM/Disk/Network usage, plot it
 --share / -x                          with --perf: auto-export to C:\avd-metrics\ every 30s for SMB access
+--teams                               with --perf: POST periodic summary card to Power Automate webhook (reads TEAMS_WEBHOOK_URL from .env beside exe)
+--teams-interval / -T <minutes>       Teams summary cadence (default 10)
+--teams-to <email-or-upn>             embed recipient in payload so the receiving flow can route 1:1
 ```
 
 `--specs` / `--perf` are a separate data path from the event-log analysis: they read the
 host's own hardware + perf counters (run *inside* the AVD session host), not RDP logs.
 `--perf` counters are `_Total` instances — whole-VM, not per-session.
+
+`--teams` is independent of `--share` — they can run together (file + webhook). HTTP uses
+`HttpClient` with `DangerousAcceptAnyServerCertificateValidator` (equivalent of Node's
+`NODE_TLS_REJECT_UNAUTHORIZED=0`) to survive corporate SSL inspection. Webhook URL is
+read at startup from `.env` next to the exe (fallback: CWD), or `TEAMS_WEBHOOK_URL` env var.
+1:1 vs channel routing is the receiving Power Automate flow's job — the payload includes
+an optional `recipient` field the flow can read.
 
 ## Conventions
 
@@ -162,6 +176,7 @@ dotnet run -- --csv
 dotnet run -- --specs
 dotnet run -- --perf
 dotnet run -- --perf --csv
+dotnet run -- --perf --teams --teams-interval 10 --teams-to me@example.com
 dotnet test AvdExperience.UnitTests
 dotnet test AvdExperience.IntegrationTests
 dotnet publish -p:PublishProfile=win-x64

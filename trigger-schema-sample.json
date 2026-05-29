@@ -1,0 +1,26 @@
+{
+  "@type": "MessageCard",
+  "@context": "https://schema.org/extensions",
+  "summary": "AVD perf — HOST",
+  "themeColor": "#0078D7",
+  "recipient": "user@example.com",
+  "sections": [
+    {
+      "activityTitle": "AVD perf — HOST",
+      "text": "Window: 10 min · 300 samples",
+      "facts": [
+        { "name": "CPU avg/peak",       "value": "15.4% / 48.6%" },
+        { "name": "RAM avg/peak",       "value": "80.5% / 81.3%" },
+        { "name": "Disk avg/peak",      "value": "3.4% / 25.4%" },
+        { "name": "DiskRead avg/peak",  "value": "1.3 MB/s / 10.2 MB/s" },
+        { "name": "DiskWrite avg/peak", "value": "1.1 MB/s / 5.9 MB/s" },
+        { "name": "NetSent avg/peak",   "value": "58.5 KB/s / 377.4 KB/s" },
+        { "name": "NetRecv avg/peak",   "value": "27.8 KB/s / 73.4 KB/s" },
+        { "name": "RTT avg/peak",       "value": "111.7 ms / 115.0 ms" },
+        { "name": "FPS avg/peak",       "value": "4.2 fps / 14.9 fps" },
+        { "name": "Frames skipped avg", "value": "0.00/s" },
+        { "name": "Loss avg/peak",      "value": "0.0% / 0.0%" }
+      ]
+    }
+  ]
+}

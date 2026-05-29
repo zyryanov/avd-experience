@@ -39,6 +39,9 @@ dotnet test AvdExperience.IntegrationTests
 | `--specs` | `-i` | — | Print the host hardware spec (CPU, RAM, disks) and exit |
 | `--perf` | `-p` | — | Live mode: sample whole-VM CPU/RAM/Disk/Network + RDP quality metrics and plot it; pair with `--csv` to dump samples |
 | `--share` | `-x` | off | With `--perf`: auto-export metrics to `C:\avd-metrics\` every 30 s for remote SMB access |
+| `--teams` | — | off | With `--perf`: POST periodic perf summary to Power Automate webhook (reads `TEAMS_WEBHOOK_URL` from `.env`) |
+| `--teams-interval` | `-T` | 10 | Minutes between Teams summary posts |
+| `--teams-to` | — | — | Embed recipient (email/UPN) in payload so the receiving flow can route to a 1:1 chat |
 
 ## What It Reports
 
@@ -122,6 +125,60 @@ Access from another machine:
 \\<MACHINE>\C$\avd-metrics\avd-perf-latest.csv
 ```
 
+### Teams notifications (`--teams`)
+
+When SMB to the AVD host is blocked, push a periodic summary card to Teams via a Power
+Automate webhook instead. Outbound HTTPS only — no firewall rule, no admin share.
+
+**Setup:**
+
+1. In Power Automate, create a flow with the **"When a Teams webhook request is received"** trigger.
+2. In the trigger, set **"Who can trigger the flow?"** to **`Anyone`** — this generates a URL with a `sig=` token used for authentication. The other options (`Any user in my tenant`, `Specific users`) require AAD bearer tokens, which avd-experience does not send.
+3. Open the trigger's *Settings* → *Use sample payload to generate schema*, paste the contents of [`trigger-schema-sample.json`](./trigger-schema-sample.json). This makes `triggerBody()?['summary']`, `triggerBody()?['recipient']`, etc. available as dynamic content downstream.
+4. Add a **"Post adaptive card in a chat or channel"** action:
+   - **Post as** = `Flow bot`
+   - **Post in** = `Chat with Flow bot`
+   - **Recipient** = expression `coalesce(triggerBody()?['recipient'], 'your.email@example.com')` (fallback when `--teams-to` not passed)
+   - **Adaptive Card** = paste the contents of [`adaptive-card.json`](./adaptive-card.json)
+5. Save the flow, copy the trigger's **HTTP URL** (now contains `&sig=...`).
+6. Put it in `.env` next to the exe (or in the repo root for `dotnet run`):
+
+   ```env
+   TEAMS_WEBHOOK_URL=https://<env>.powerplatform.com/.../invoke?api-version=1&sp=...&sig=...
+   ```
+
+7. Run:
+
+   ```bash
+   dotnet run -- --perf --teams --teams-interval 10 --teams-to me@example.com
+   ```
+
+Every 10 minutes the tool POSTs a `MessageCard` with CPU / RAM / Disk / Net / RTT / FPS
+avg-and-peak across the window. The live console table keeps updating in parallel.
+
+**Card payload shape (relevant fields):**
+
+```json
+{
+  "@type": "MessageCard",
+  "@context": "https://schema.org/extensions",
+  "summary": "AVD perf — UE2S1DWPP-1105",
+  "themeColor": "#0078D7",
+  "recipient": "me@example.com",
+  "sections": [{ "activityTitle": "...", "text": "...", "facts": [ ... ] }]
+}
+```
+
+**1:1 vs channel routing** — the avd-experience tool just POSTs the payload. Where the
+message lands is decided by the receiving Power Automate flow. The setup above uses 1:1 DM
+via Flow bot, driven by the payload's `recipient` field. To post to a channel instead, swap
+the action's *Post in* to *Channel* and select the channel.
+
+The Flow URL itself is the credential — `.env` is in `.gitignore`. Keep it that way.
+
+**Corporate SSL inspection:** the HttpClient is configured with `DangerousAcceptAnyServerCertificateValidator`
+(equivalent of Node's `NODE_TLS_REJECT_UNAUTHORIZED=0`), matching the prior `teams-webhook-mcp` setup.
+
 ## Architecture
 
 F# modules in dependency order:
@@ -134,6 +191,7 @@ Stats.fs         — State machine: raw events → typed intervals → DayStats/
 SysInfo.fs       — Static hardware spec (CPU/RAM/disks)
 PerfMonitor.fs   — Live CPU/RAM/Disk/Network + RemoteFX RDP perf-counter sampling
 CsvExport.fs     — Write events/intervals/perf samples to CSV
+Teams.fs         — MessageCard payload builder + .env loader + HttpClient POST to Power Automate webhook
 Report.fs        — Format PeriodStats, spec table, and live usage for console
 Program.fs       — CLI arg parsing (Argu), pipeline orchestration
 ```
