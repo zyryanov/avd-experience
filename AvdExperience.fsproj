@@ -21,7 +21,10 @@
     <Compile Include="EventLog.fs" />
     <Compile Include="Events.fs" />
     <Compile Include="Stats.fs" />
+    <Compile Include="SysInfo.fs" />
+    <Compile Include="PerfMonitor.fs" />
     <Compile Include="CsvExport.fs" />
+    <Compile Include="Teams.fs" />
     <Compile Include="Report.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
@@ -30,6 +33,7 @@
     <PackageReference Include="Argu" Version="6.2.5" />
     <PackageReference Include="Spectre.Console" Version="0.55.2" />
     <PackageReference Include="System.Diagnostics.EventLog" Version="10.0.8" />
+    <PackageReference Include="System.Diagnostics.PerformanceCounter" Version="10.0.8" />
   </ItemGroup>
 
 </Project>

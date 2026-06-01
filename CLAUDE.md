@@ -12,6 +12,7 @@ CLI app reads Windows Event logs, analyzes Azure AVD session records:
 - Windows Event Log API (`System.Diagnostics.Eventing.Reader`)
 - Argu — CLI argument parsing
 - Spectre.Console — colored table and ANSI markup output
+- `System.Diagnostics.PerformanceCounter` — live CPU/RAM/Disk/Network sampling (`--perf`)
 - Target: `net10.0`, single exe
 
 ## Workflow
@@ -39,7 +40,23 @@ Stats.fs      — State machine: stepState (unlocked path) + shadowStep (AVD eve
                 advanceState (routes by locked/unlock/normal); nextConnectReason tracks ConnectReason
                 across transitions; intervalReportContrib computes disruption cost per closed interval;
                 computeWithTrace aggregates into DayStats/PeriodStats and splits intervals by day via splitByDay
+SysInfo.fs    — Static hardware spec (collect → SystemSpec): CPU (PROCESSOR_IDENTIFIER env),
+                logical CPU count, RAM via P/Invoke GlobalMemoryStatusEx, fixed disks via
+                DriveInfo; pure helpers formatBytes / ramUsedPct / diskUsedPct
+PerfMonitor.fs— Live resource sampling; createCounters builds whole-VM "_Total"
+                PerformanceCounters (CPU/RAM/Disk/DiskRead/DiskWrite) + per-instance
+                Network Interface counters (Bytes Sent|Received/sec, summed across
+                all NICs) + optional RemoteFX RDP counters (RTT, FPS, encoding time,
+                frame quality, frames skipped, loss rate — per-session instances,
+                auto-discovered via tryCreateRdpCounters); sample → PerfSample;
+                pure helpers sparkBar / sparkBarScaled / sparkline / sparklineScaled /
+                pushSample / average / peak
+Teams.fs      — MessageCard payload builder (buildSummary: PerfSample summary → JSON);
+                minimal .env parser (parseDotenv / loadDotenv); HttpClient factory
+                (createClient — bypasses cert validation for corp SSL inspection);
+                fire-and-forget POST (postAsync) to Power Automate webhook
 Report.fs     — Spectre.Console colored table (printStats); state-change trace log (printTrace);
+                printSpecs (spec table); perfRenderable (live usage table w/ sparklines);
                 format helpers (fmtTime, formatDuration, stateMarkup, stateColor)
 Program.fs    — CLI arg parsing (Argu); runMonitor for live event subscription (bootstrapState
                 seeds initial state from last 24h); run for historical range query + optional CSV
@@ -105,8 +122,25 @@ Aggregated into `ReportTime` per day and `TotalReport` for the period.
 --start / -s / --from  <yyyy-MM-dd>   start date inclusive (default: today)
 --end   / -t / --to    <yyyy-MM-dd>   end date inclusive   (default: today)
 --monitor / -m                        live mode: watch event log, print each transition
---csv   / -c                          export events and intervals to CSV files
+--csv   / -c                          export to CSV (events+intervals; or perf samples with --perf)
+--specs / -i                          print host hardware spec (CPU/RAM/disks) and exit
+--perf  / -p                          live mode: sample whole-VM CPU/RAM/Disk/Network usage, plot it
+--share / -x                          with --perf: auto-export to C:\avd-metrics\ every 30s for SMB access
+--teams                               with --perf: POST periodic summary card to Power Automate webhook (reads TEAMS_WEBHOOK_URL from .env beside exe)
+--teams-interval / -T <minutes>       Teams summary cadence (default 10)
+--teams-to <email-or-upn>             embed recipient in payload so the receiving flow can route 1:1
 ```
+
+`--specs` / `--perf` are a separate data path from the event-log analysis: they read the
+host's own hardware + perf counters (run *inside* the AVD session host), not RDP logs.
+`--perf` counters are `_Total` instances — whole-VM, not per-session.
+
+`--teams` is independent of `--share` — they can run together (file + webhook). HTTP uses
+`HttpClient` with `DangerousAcceptAnyServerCertificateValidator` (equivalent of Node's
+`NODE_TLS_REJECT_UNAUTHORIZED=0`) to survive corporate SSL inspection. Webhook URL is
+read at startup from `.env` next to the exe (fallback: CWD), or `TEAMS_WEBHOOK_URL` env var.
+1:1 vs channel routing is the receiving Power Automate flow's job — the payload includes
+an optional `recipient` field the flow can read.
 
 ## Conventions
 
@@ -139,6 +173,10 @@ dotnet run
 dotnet run -- --start 2026-05-01 --end 2026-05-18
 dotnet run -- --monitor
 dotnet run -- --csv
+dotnet run -- --specs
+dotnet run -- --perf
+dotnet run -- --perf --csv
+dotnet run -- --perf --teams --teams-interval 10 --teams-to me@example.com
 dotnet test AvdExperience.UnitTests
 dotnet test AvdExperience.IntegrationTests
 dotnet publish -p:PublishProfile=win-x64

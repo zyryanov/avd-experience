@@ -1,4 +1,6 @@
 <linker>
   <assembly fullname="avd-experience" preserve="all" />
   <assembly fullname="Argu" preserve="all" />
+  <assembly fullname="System.Diagnostics.PerformanceCounter" preserve="all" />
+  <assembly fullname="System.Net.Http" preserve="all" />
 </linker>

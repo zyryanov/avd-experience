@@ -1,0 +1,52 @@
+{
+  "type": "AdaptiveCard",
+  "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+  "version": "1.5",
+  "body": [
+    {
+      "type": "Container",
+      "style": "@{if(equals(triggerBody()?['themeColor'], '#D13438'), 'attention', 'good')}",
+      "bleed": true,
+      "items": [
+        {
+          "type": "TextBlock",
+          "text": "@{triggerBody()?['summary']}",
+          "weight": "Bolder",
+          "size": "Large",
+          "wrap": true
+        },
+        {
+          "type": "TextBlock",
+          "text": "@{triggerBody()?['sections']?[0]?['text']}",
+          "isSubtle": true,
+          "wrap": true,
+          "spacing": "None"
+        }
+      ]
+    },
+    {
+      "type": "FactSet",
+      "facts": [
+        { "title": "@{triggerBody()?['sections']?[0]?['facts']?[0]?['name']}",  "value": "@{triggerBody()?['sections']?[0]?['facts']?[0]?['value']}"  },
+        { "title": "@{triggerBody()?['sections']?[0]?['facts']?[1]?['name']}",  "value": "@{triggerBody()?['sections']?[0]?['facts']?[1]?['value']}"  },
+        { "title": "@{triggerBody()?['sections']?[0]?['facts']?[2]?['name']}",  "value": "@{triggerBody()?['sections']?[0]?['facts']?[2]?['value']}"  },
+        { "title": "@{triggerBody()?['sections']?[0]?['facts']?[3]?['name']}",  "value": "@{triggerBody()?['sections']?[0]?['facts']?[3]?['value']}"  },
+        { "title": "@{triggerBody()?['sections']?[0]?['facts']?[4]?['name']}",  "value": "@{triggerBody()?['sections']?[0]?['facts']?[4]?['value']}"  },
+        { "title": "@{triggerBody()?['sections']?[0]?['facts']?[5]?['name']}",  "value": "@{triggerBody()?['sections']?[0]?['facts']?[5]?['value']}"  },
+        { "title": "@{triggerBody()?['sections']?[0]?['facts']?[6]?['name']}",  "value": "@{triggerBody()?['sections']?[0]?['facts']?[6]?['value']}"  },
+        { "title": "@{triggerBody()?['sections']?[0]?['facts']?[7]?['name']}",  "value": "@{triggerBody()?['sections']?[0]?['facts']?[7]?['value']}"  },
+        { "title": "@{triggerBody()?['sections']?[0]?['facts']?[8]?['name']}",  "value": "@{triggerBody()?['sections']?[0]?['facts']?[8]?['value']}"  },
+        { "title": "@{triggerBody()?['sections']?[0]?['facts']?[9]?['name']}",  "value": "@{triggerBody()?['sections']?[0]?['facts']?[9]?['value']}"  },
+        { "title": "@{triggerBody()?['sections']?[0]?['facts']?[10]?['name']}", "value": "@{triggerBody()?['sections']?[0]?['facts']?[10]?['value']}" }
+      ]
+    },
+    {
+      "type": "TextBlock",
+      "text": "Sent by avd-experience",
+      "size": "Small",
+      "isSubtle": true,
+      "horizontalAlignment": "Right",
+      "spacing": "Medium"
+    }
+  ]
+}

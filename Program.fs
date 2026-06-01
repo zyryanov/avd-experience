@@ -1,5 +1,6 @@
 open System
 open System.IO
+open System.Threading.Tasks
 open Argu
 open Spectre.Console
 open AvdStats.Elevation
@@ -7,6 +8,9 @@ open AvdStats.EventLog
 open AvdStats.Events
 open AvdStats.CsvExport
 open AvdStats.Stats
+open AvdStats.SysInfo
+open AvdStats.PerfMonitor
+open AvdStats.Teams
 open AvdStats.Report
 
 type Args =
@@ -14,13 +18,25 @@ type Args =
     | [<AltCommandLine("-t", "--to")>]   End of string
     | [<AltCommandLine("-m")>] Monitor
     | [<AltCommandLine("-c")>] Csv
+    | [<AltCommandLine("-i")>] Specs
+    | [<AltCommandLine("-p")>] Perf
+    | [<AltCommandLine("-x")>] Share
+    | Teams
+    | [<AltCommandLine("-T")>] Teams_Interval of minutes:int
+    | Teams_To of recipient:string
     interface IArgParserTemplate with
         member x.Usage =
             match x with
             | Start _ -> "start date, inclusive (yyyy-MM-dd); alias --from / -s. Default: start of today."
             | End _   -> "end date, inclusive (yyyy-MM-dd); alias --to / -t. Default: end of today."
             | Monitor -> "watch live event log for AVD state changes; prints each transition with timestamp and duration"
-            | Csv     -> "export events and intervals to CSV files (off by default)"
+            | Csv     -> "export to CSV files (events+intervals, or perf samples with --perf); off by default"
+            | Specs   -> "print the host hardware spec (CPU, RAM, disks) and exit"
+            | Perf    -> "live mode: sample whole-VM CPU/RAM/Disk usage and plot it; pair with --csv to also dump samples"
+            | Share   -> "with --perf: auto-export metrics to C:\\avd-metrics\\ every 30s for remote access via SMB admin share"
+            | Teams   -> "with --perf: post a periodic perf summary card to Teams via Power Automate webhook (reads TEAMS_WEBHOOK_URL from .env)"
+            | Teams_Interval _ -> "minutes between Teams summary posts (default 10)"
+            | Teams_To _       -> "embed recipient (email/UPN) in payload so the Power Automate flow can route to a 1:1 chat"
 
 let private fmt (d: DateTimeOffset) = d.ToString "yyyy-MM-dd"
 
@@ -153,6 +169,131 @@ let private run (from: DateTimeOffset) (until: DateTimeOffset) (writeCsv: bool) 
         printStats stats
         0
 
+let private perfIntervalMs = 2000
+let private perfWindow = 60
+
+let private runSpecs () : int =
+    printSpecs (collect ())
+    0
+
+let private shareDir = @"C:\avd-metrics"
+let private shareFlushInterval = 15
+
+type TeamsConfig =
+    { WebhookUrl: string
+      IntervalMin: int
+      Recipient: string option }
+
+let private exeDir () =
+    try
+        let p = Diagnostics.Process.GetCurrentProcess().MainModule.FileName
+        Some (Path.GetDirectoryName p)
+    with _ -> None
+
+let private loadWebhookUrl () : string option =
+    let envVal = Environment.GetEnvironmentVariable "TEAMS_WEBHOOK_URL"
+    if not (String.IsNullOrWhiteSpace envVal) then Some envVal
+    else
+        let candidates =
+            [ exeDir () |> Option.map (fun d -> Path.Combine(d, ".env"))
+              Some (Path.Combine(Environment.CurrentDirectory, ".env")) ]
+            |> List.choose id
+            |> List.distinct
+        candidates
+        |> List.tryPick (fun p ->
+            let m = loadDotenv p
+            Map.tryFind "TEAMS_WEBHOOK_URL" m)
+
+let private buildTeamsConfig (intervalMin: int) (recipient: string option) : Result<TeamsConfig, string> =
+    match loadWebhookUrl () with
+    | None ->
+        Error ("TEAMS_WEBHOOK_URL not set. Create a .env next to the exe with:\n"
+             + "  TEAMS_WEBHOOK_URL=https://...powerplatform.com/.../invoke?...&sig=...")
+    | Some url ->
+        Ok { WebhookUrl = url
+             IntervalMin = max 1 intervalMin
+             Recipient = recipient }
+
+let private runPerf (writeCsv: bool) (share: bool) (teams: TeamsConfig option) : int =
+    let spec = collect ()
+    printSpecs spec
+    if share then
+        Directory.CreateDirectory shareDir |> ignore
+        writeSpecsTxt (Path.Combine(shareDir, "avd-specs.txt")) spec
+        let unc = sprintf @"\\%s\C$\avd-metrics\" spec.MachineName
+        AnsiConsole.MarkupLine(sprintf "[green]✓ Share:[/] %s" (Markup.Escape shareDir))
+        AnsiConsole.MarkupLine(sprintf "[dim]Remote:[/] %s" (Markup.Escape unc))
+    let teamsClient =
+        teams |> Option.map (fun cfg ->
+            let host = try (Uri cfg.WebhookUrl).Host with _ -> "<invalid url>"
+            let recipientNote =
+                match cfg.Recipient with
+                | Some r -> sprintf ", recipient=%s" r
+                | None -> ""
+            AnsiConsole.MarkupLine(sprintf "[green]✓ Teams:[/] every %d min → [dim]%s[/]%s"
+                cfg.IntervalMin (Markup.Escape host) (Markup.Escape recipientNote))
+            createClient (), cfg)
+    match createCounters () with
+    | Error msg ->
+        AnsiConsole.MarkupLine(sprintf "[red bold]✗ Cannot read performance counters:[/] %s" (Markup.Escape msg))
+        AnsiConsole.MarkupLine "[dim]Disk/CPU counters need admin or 'Performance Monitor Users' membership.[/]"
+        1
+    | Ok counters ->
+        let totalRamMB = float spec.TotalRamBytes / 1048576.0
+        let all = ResizeArray<PerfSample>()
+        let mutable tick = 0
+        use stop = new Threading.ManualResetEventSlim(false)
+        Console.CancelKeyPress.Add(fun e ->
+            e.Cancel <- true
+            stop.Set())
+        sample counters totalRamMB |> ignore
+        AnsiConsole.MarkupLine "[dim italic]Sampling every 2s… (Ctrl+C to stop)[/]"
+        AnsiConsole.Live(perfRenderable []).Start(fun ctx ->
+            while not stop.IsSet do
+                let s = sample counters totalRamMB
+                all.Add s
+                tick <- tick + 1
+                let window =
+                    let n = all.Count
+                    if n > perfWindow then List.ofSeq (Seq.skip (n - perfWindow) all)
+                    else List.ofSeq all
+                ctx.UpdateTarget(perfRenderable window)
+                ctx.Refresh()
+                if share && tick % shareFlushInterval = 0 then
+                    writePerfCsv (Path.Combine(shareDir, "avd-perf-latest.csv")) window
+                match teamsClient with
+                | Some (client, cfg) ->
+                    let ticksPerPost = cfg.IntervalMin * 60 * 1000 / perfIntervalMs
+                    if tick % ticksPerPost = 0 then
+                        let recentSamples =
+                            let n = all.Count
+                            if n > ticksPerPost then List.ofSeq (Seq.skip (n - ticksPerPost) all)
+                            else List.ofSeq all
+                        let summary =
+                            { MachineName  = spec.MachineName
+                              WindowMinutes = cfg.IntervalMin
+                              Samples       = recentSamples
+                              Recipient     = cfg.Recipient
+                              HasIssues     = false }
+                        let body = buildSummary summary
+                        // fire-and-forget; never let webhook failures break the sampling loop
+                        (postAsync client cfg.WebhookUrl body).ContinueWith(fun (t: Task<Result<unit,string>>) ->
+                            match t.Result with
+                            | Ok ()    -> ()
+                            | Error e  -> AnsiConsole.MarkupLine(sprintf "[yellow]⚠ Teams post failed:[/] %s" (Markup.Escape e))) |> ignore
+                | None -> ()
+                stop.Wait perfIntervalMs |> ignore)
+        dispose counters
+        teamsClient |> Option.iter (fun (c, _) -> c.Dispose())
+        if share && all.Count > 0 then
+            writePerfCsv (Path.Combine(shareDir, "avd-perf-full.csv")) (List.ofSeq all)
+            AnsiConsole.MarkupLine(sprintf "[green]✓ Full export:[/] %s" (Markup.Escape (Path.Combine(shareDir, "avd-perf-full.csv"))))
+        if writeCsv && all.Count > 0 then
+            let path = nextAvailablePath (sprintf "avd-perf-%s" (DateTime.Now.ToString "yyyyMMdd-HHmmss")) ".csv"
+            writePerfCsv path (List.ofSeq all)
+            AnsiConsole.MarkupLine(sprintf "[green]✓ Perf CSV:[/] %s" (Markup.Escape path))
+        0
+
 let private runParsed (argv: string[]) =
     let parser = ArgumentParser.Create<Args>(programName = "avd-experience")
     let parsed =
@@ -163,6 +304,20 @@ let private runParsed (argv: string[]) =
     match parsed with
     | Error code -> code
     | Ok args when args.Contains Monitor -> runMonitor ()
+    | Ok args when args.Contains Specs -> runSpecs ()
+    | Ok args when args.Contains Perf ->
+        let teamsCfg =
+            if args.Contains Teams then
+                let interval = args.TryGetResult Teams_Interval |> Option.defaultValue 10
+                let recipient = args.TryGetResult Teams_To
+                match buildTeamsConfig interval recipient with
+                | Ok cfg -> Some cfg
+                | Error e ->
+                    AnsiConsole.MarkupLine(sprintf "[red bold]✗ Teams:[/] %s" (Markup.Escape e))
+                    None
+            else None
+        if args.Contains Teams && teamsCfg.IsNone then 1
+        else runPerf (args.Contains Csv) (args.Contains Share) teamsCfg
     | Ok args ->
         let from =
             match args.TryGetResult Start with
