@@ -260,5 +260,15 @@ dotnet run -- -s 2026-05-01 -t 2026-05-18
 dotnet run -- --monitor
 dotnet test AvdExperience.UnitTests
 dotnet test AvdExperience.IntegrationTests
-dotnet publish -p:PublishProfile=win-x64
+dotnet publish -p:PublishProfile=win-x64                # CLI → publish\win-x64
+dotnet publish AvdExperience.Service -c Release -p:PublishProfile=win-x64 -o publish/
+```
+
+### Release packaging
+
+GitHub Releases ship `avd-experience-<version>-win-x64.zip` (both exes + `e_sqlite3.dll`) plus
+`SHA256SUMS.txt` — see `.github/workflows/release.yml`. `e_sqlite3.dll` must sit beside the exes
+(native SQLite is not bundled into single-file apps). The service profile deliberately skips
+`PublishTrimmed` (trimmer is unsafe with the Windows Service host). Users extract both exes to a
+permanent folder; the CLI finds `avd-service.exe` beside itself and installs it on demand.
 ```

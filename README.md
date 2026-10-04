@@ -4,9 +4,19 @@ CLI tool that reads Windows Event Logs and analyzes Azure AVD session quality �
 
 ## Download
 
-Grab the latest `avd-experience.exe` from [Releases](../../releases/latest). No .NET install required — self-contained single binary.
+Grab the latest `avd-experience-<version>-win-x64.zip` from [Releases](../../releases/latest). No .NET install required — self-contained binaries.
 
-Run it: the tool will self-relaunch elevated via UAC if not running as admin.
+Extract **both** executables and `e_sqlite3.dll` into a permanent folder (e.g. `Tools\avd-experience`) — the Windows service registration points at this location, so not a temp dir or an in-zip preview.
+
+Run `avd-experience.exe`: on first run it elevates once via UAC to install and start the `avd-service.exe` service (which records AVD activity into a local database); afterwards reports run without elevation. A `SHA256SUMS.txt` next to the zip lets you verify the download.
+
+### Upgrading
+
+1. `avd-experience service stop`
+2. Extract the new zip over the same folder
+3. `avd-experience service start`
+
+(Or `service uninstall`, replace the files, and let the CLI reinstall on the next run.)
 
 ## Requirements
 

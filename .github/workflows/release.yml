@@ -14,7 +14,7 @@ env:
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
@@ -29,13 +29,28 @@ jobs:
       - name: Integration Test
         run: dotnet test AvdExperience.IntegrationTests
 
-      - name: Publish
+      - name: Publish CLI
         run: |
           $version = "${{ github.ref_name }}".TrimStart('v')
-          dotnet publish -p:PublishProfile=win-x64 -p:Version=$version -o publish/
+          dotnet publish -c Release -p:PublishProfile=win-x64 -p:Version=$version -o publish/
+
+      - name: Publish Service
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          dotnet publish AvdExperience.Service -c Release -p:PublishProfile=win-x64 -p:Version=$version -o publish/
+
+      - name: Package
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          $zip = "avd-experience-$version-win-x64.zip"
+          Compress-Archive -Path publish/avd-experience.exe, publish/avd-service.exe, publish/e_sqlite3.dll -DestinationPath "publish/$zip"
+          $hash = (Get-FileHash "publish/$zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $zip" | Set-Content publish/SHA256SUMS.txt
 
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          files: publish/avd-experience.exe
+          files: |
+            publish/avd-experience-*-win-x64.zip
+            publish/SHA256SUMS.txt
           generate_release_notes: true
