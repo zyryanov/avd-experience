@@ -2,6 +2,7 @@ module AvdStats.UnitTests.ProgramTests
 
 open Xunit
 open FsUnit.Xunit
+open Argu
 open AvdStats.DateParser
 
 // Program.fs has no explicit module declaration; F# creates implicit module
@@ -73,4 +74,27 @@ let ``parseDateAt invalid inputs return Error`` (input: string) =
     match parseDateAt refDate input with
     | Error _ -> ()
     | Ok d    -> failwith (sprintf "Expected Error for '%s', but got %A" input d)
+
+// ── CLI parser: the service subcommand must be discoverable via --help ────────
+// Regression: 'service' was dispatched before the Argu parser, so --help never
+// mentioned the service control commands.
+
+let parser = ArgumentParser.Create<Program.Args>(programName = "avd-experience")
+
+[<Fact>]
+let ``usage lists the service subcommand and its verbs`` () =
+    let usage = parser.PrintUsage()
+    usage.Contains "service" |> should equal true
+    usage.Contains "uninstall" |> should equal true
+
+[<Fact>]
+let ``'service status' parses as the Service subcommand`` () =
+    let args = parser.ParseCommandLine [| "service"; "status" |]
+    args.GetResult Program.Service |> should equal "status"
+
+[<Fact>]
+let ``service parsing is position-independent`` () =
+    let args = parser.ParseCommandLine [| "-s"; "2026-05-01"; "service"; "install" |]
+    args.GetResult Program.Service |> should equal "install"
+    args.GetResult Program.Start |> should equal "2026-05-01"
 

@@ -46,6 +46,7 @@ dotnet test AvdExperience.IntegrationTests
 | `--end` | `-t`, `--to` | today | End date, inclusive (`yyyy-MM-dd` or relative: `today`, `yesterday`, `-1d`, `-2w`, `3 days ago`) |
 | `--monitor` | `-m` | — | Watch live event log; print each state transition with timestamp and duration |
 | `--csv` | `-c` | off | Export raw events and intervals to CSV files |
+| `service <verb>` | — | — | Manage the background service: `status` (no elevation), `start`, `stop`, `install`, `uninstall` (elevate as needed) |
 
 ## What It Reports
 

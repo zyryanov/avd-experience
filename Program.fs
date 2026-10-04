@@ -17,6 +17,9 @@ type Args =
     | [<AltCommandLine("-t", "--to")>]   End of string
     | [<AltCommandLine("-m")>] Monitor
     | [<AltCommandLine("-c")>] Csv
+    // CliPrefix.None makes this a bare subcommand ('service status'), so it shows
+    // up in --help next to the flags and is parsed position-independently.
+    | [<CliPrefix(CliPrefix.None); Unique>] Service of string
     interface IArgParserTemplate with
         member x.Usage =
             match x with
@@ -24,6 +27,7 @@ type Args =
             | End _   -> "end date, inclusive (yyyy-MM-dd or relative: today, yesterday, -1d, -2w); alias --to / -t. Default: end of today."
             | Monitor -> "poll avd.db for live AVD state changes; prints each transition with timestamp and duration"
             | Csv     -> "export events and intervals to CSV files (off by default)"
+            | Service _ -> "manage the background AVD service: status | start | stop | install | uninstall (e.g. 'avd-experience service status')"
 
 let private fmt (d: DateTimeOffset) = d.ToString "yyyy-MM-dd"
 
@@ -168,6 +172,7 @@ let private runParsed (argv: string[]) =
             Error 1
     match parsed with
     | Error code -> code
+    | Ok args when args.Contains Service -> runServiceCommand (args.GetResult Service)
     | Ok args when args.Contains Monitor -> AvdStats.MonitorWatcher.run ()
     | Ok args ->
         let from =
@@ -187,11 +192,4 @@ let private runParsed (argv: string[]) =
 [<EntryPoint>]
 let main argv =
     Console.OutputEncoding <- Text.Encoding.UTF8
-    let cleanArgv = tryRedirectOutput argv
-    if cleanArgv.Length >= 1 && cleanArgv.[0] = "service" then
-        if cleanArgv.Length = 2 then runServiceCommand cleanArgv.[1]
-        else
-            AnsiConsole.MarkupLine "[red]Usage:[/] avd-experience service <status|start|stop|install|uninstall>"
-            1
-    else
-        runParsed cleanArgv
+    runParsed (tryRedirectOutput argv)
