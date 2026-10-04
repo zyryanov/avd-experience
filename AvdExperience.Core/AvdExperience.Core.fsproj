@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="EventLog.fs" />
+    <Compile Include="Events.fs" />
+    <Compile Include="Stats.fs" />
+    <Compile Include="DateParser.fs" />
+    <Compile Include="DbSchema.fs" />
+    <Compile Include="DbRepository.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
+    <PackageReference Include="SqlHydra.Query" Version="5.1.0" />
+    <PackageReference Include="System.Diagnostics.EventLog" Version="10.0.12" />
+  </ItemGroup>
+</Project>

@@ -586,3 +586,94 @@ let ``Zero-duration interval gives no slices`` () =
     let interval = { Kind = Paused; Start = start; End = start }
     let slices = splitByDay interval
     slices |> List.length |> should equal 0
+
+// ── foldState: shared history-derivation used by CLI / monitor / service ─────
+
+[<Fact>]
+let ``foldState carries shadow across lock: initiate during lock resumes Connecting on unlock`` () =
+    let events = [ lockEvent t0; connectEvent t1; unlockEvent t2 ]
+    let state, locked, shadow, reason = foldState None false None None events
+    state |> should equal (Some (Connecting, t2))
+    locked |> should equal false
+    shadow |> should equal None
+    reason |> should equal (Some Initial)
+
+[<Fact>]
+let ``foldState: drop during lock is absorbed into shadow, unlock resumes Paused`` () =
+    let events = [ connectEvent t0; connectedEvent t1; lockEvent t2; disconnEvent t3; unlockEvent t4 ]
+    let state, locked, shadow, reason = foldState None false None None events
+    state |> should equal (Some (Paused, t4))
+    locked |> should equal false
+    shadow |> should equal None
+
+[<Fact>]
+let ``foldState while locked keeps outward state and does not close intervals`` () =
+    // connect → connected → lock: lock closes Active and pauses; subsequent AVD
+    // events while locked must not generate outward transitions or closed intervals
+    let events = [ connectEvent t0; connectedEvent t1; lockEvent t2; disconnEvent t3 ]
+    let state, locked, shadow, _ = foldState None false None None events
+    state |> should equal (Some (Paused, t2))
+    locked |> should equal true
+    shadow |> Option.map fst |> should equal (Some Paused)
+
+// ── foldHistory: closed intervals + final state, shared by the service derive ──
+
+[<Fact>]
+let ``foldHistory returns closed intervals with the reason at close time`` () =
+    // initiate → connected → drop → initiate → connected:
+    // C1 closes with Initial, A1 with Initial, Issue with no reason, C2 with PostIssue
+    let events = [ connectEvent t0; connectedEvent t1; disconnEvent t2; connectEvent t3; connectedEvent t4 ]
+    let closed, state, locked, shadow, reason = foldHistory None false None None events
+    closed
+    |> List.map (fun (iv, r) -> iv.Kind, iv.Start, iv.End, r)
+    |> should equal
+        [ (Connecting, t0, t1, Some Initial)
+          (Active,     t1, t2, Some Initial)
+          (Issue,      t2, t3, None)
+          (Connecting, t3, t4, Some PostIssue) ]
+    state |> should equal (Some (Active, t4))
+    locked |> should equal false
+    shadow |> should equal None
+    reason |> should equal (Some PostIssue)
+
+[<Fact>]
+let ``foldHistory closes Active and Paused around a lock/drop/unlock cycle`` () =
+    let events = [ connectEvent t0; connectedEvent t1; lockEvent t2; disconnEvent t3; unlockEvent t4 ]
+    let closed, state, locked, shadow, reason = foldHistory None false None None events
+    closed
+    |> List.map (fun (iv, r) -> iv.Kind, iv.Start, iv.End, r)
+    |> should equal
+        [ (Connecting, t0, t1, Some Initial)
+          (Active,     t1, t2, Some Initial)
+          (Paused,      t2, t4, Some Initial) ]
+    state |> should equal (Some (Paused, t4))
+    locked |> should equal false
+    shadow |> should equal None
+    reason |> should equal (Some Initial)
+
+[<Fact>]
+let ``foldHistory does not close the trailing open interval`` () =
+    let events = [ connectEvent t0 ]
+    let closed, state, locked, shadow, reason = foldHistory None false None None events
+    closed |> List.length |> should equal 0
+    state |> should equal (Some (Connecting, t0))
+    locked |> should equal false
+    shadow |> should equal None
+    reason |> should equal (Some Initial)
+
+[<Fact>]
+let ``foldHistory closed intervals match computeWithTrace minus the trailing interval`` () =
+    // buildIntervalsWithTrace (CLI reports, TraceResult.Intervals) and foldHistory
+    // (service derive, Intervals table) are two walks over the same state machine —
+    // their CLOSED intervals must be identical. Only the trailing open interval
+    // differs: computeWithTrace closes it at the period end, foldHistory leaves it
+    // open for the state snapshot.
+    let events = [ connectEvent t0; connectedEvent t1; disconnEvent t2; connectEvent t3; connectedEvent t4 ]
+    let _, trace = computeWithTrace None false None (t4.AddYears 1) events
+    let closed, _, _, _, _ = foldHistory None false None None events
+
+    trace.Intervals |> List.length |> should equal (closed.Length + 1)   // + trailing
+    trace.Intervals
+    |> List.truncate (trace.Intervals.Length - 1)
+    |> List.map (fun iv -> iv.Kind, iv.Start, iv.End)
+    |> should equal (closed |> List.map (fun (iv, _) -> iv.Kind, iv.Start, iv.End))

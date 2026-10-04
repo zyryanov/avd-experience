@@ -5,3 +5,5 @@ publish/
 .~*#
 
 .claude/
+*.db
+!template.db

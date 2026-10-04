@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>avd-service</AssemblyName>
+    <RootNamespace>AvdStats.Service</RootNamespace>
+    <Version>0.1.0</Version>
+    <Description>AVD Experience Monitor Service — continuous event ingestion and interval storage</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Ingestion.fs" />
+    <Compile Include="IngestionWorker.fs" />
+    <Compile Include="Hosting.fs" />
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AvdExperience.Core\AvdExperience.Core.fsproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.12" />
+  </ItemGroup>
+
+</Project>

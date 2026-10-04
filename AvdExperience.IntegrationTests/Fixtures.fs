@@ -1,7 +1,19 @@
 module AvdStats.IntegrationTests.Fixtures
 
 open System
+open System.IO
 open AvdStats.EventLog
+
+/// Fresh temp SQLite DB per test (unique path avoids connection-pool file locks).
+let withTempDb (f: string -> unit) =
+    let dbPath = Path.Combine(Path.GetTempPath(), "avd-dbtest-" + Guid.NewGuid().ToString("N") + ".db")
+    try
+        AvdStats.DbRepository.initDatabase dbPath
+        f dbPath
+    finally
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools()
+        for p in [ dbPath; dbPath + "-wal"; dbPath + "-shm" ] do
+            if File.Exists p then File.Delete p
 
 let private make id provider props (t: DateTimeOffset) : LogEvent =
     { Id = id; TimeCreated = t; Provider = provider; Message = None; Properties = props }

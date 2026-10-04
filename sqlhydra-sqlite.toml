@@ -1,0 +1,9 @@
+[general]
+connection = "Data Source=template.db"
+output = "AvdExperience.Core/DbSchema.fs"
+namespace = "AvdStats.DbSchema"
+cli_mutable = true
+
+[sqlhydra_query_integration]
+provider_db_type_attributes = true
+table_declarations = true

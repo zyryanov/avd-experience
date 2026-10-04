@@ -209,6 +209,48 @@ let advanceState
         let newState, closed = stepState state e
         newState, false, None, closed
 
+/// Fold a chronologically ordered event list through the state machine, returning the
+/// final outward state, locked flag, shadow state, and connect reason.
+/// The single shared implementation of "derive current state from history" — used by the
+/// CLI report path, the monitor, and the service warmup tests.
+let foldState
+    (initState: (IntervalKind * DateTimeOffset) option)
+    (initLocked: bool)
+    (initShadow: (IntervalKind * DateTimeOffset) option)
+    (initReason: ConnectReason option)
+    (events: LogEvent list)
+    : (IntervalKind * DateTimeOffset) option * bool * (IntervalKind * DateTimeOffset) option * ConnectReason option =
+    events
+    |> List.fold
+        (fun (st, lk, sh, rs) e ->
+            let st', lk', sh', closed = advanceState st lk sh e
+            let rs' = nextConnectReason st st' rs closed
+            st', lk', sh', rs')
+        (initState, initLocked, initShadow, initReason)
+
+/// Fold a chronologically ordered event list through the state machine, returning
+/// every CLOSED interval paired with the connect reason in effect at close time
+/// (the reason `intervalReportContrib` charges), plus the final state variables.
+/// The trailing open interval is not closed here — callers decide how to account
+/// for it (the state snapshot captures it; computeWithTrace closes it at the
+/// period end). The shared implementation behind the service's derivation
+/// (`Ingestion.derive`) and the Intervals rows it persists.
+let foldHistory
+    (initState: (IntervalKind * DateTimeOffset) option)
+    (initLocked: bool)
+    (initShadow: (IntervalKind * DateTimeOffset) option)
+    (initReason: ConnectReason option)
+    (events: LogEvent list)
+    : (Interval * ConnectReason option) list * (IntervalKind * DateTimeOffset) option * bool * (IntervalKind * DateTimeOffset) option * ConnectReason option =
+    let closed, st, lk, sh, rs =
+        (([], initState, initLocked, initShadow, initReason), events)
+        ||> List.fold (fun (closed, st, lk, sh, rs) e ->
+            let st', lk', sh', closedIv = advanceState st lk sh e
+            let rs' = nextConnectReason st st' rs closedIv
+            let closed' = match closedIv with Some iv -> (iv, rs) :: closed | None -> closed
+            closed', st', lk', sh', rs')
+    List.rev closed, st, lk, sh, rs
+
 let private buildIntervalsWithTrace (initState: (IntervalKind * DateTimeOffset) option) (initLocked: bool) (initReason: ConnectReason option) (periodEnd: DateTimeOffset) (events: LogEvent list) : Interval list * EventTrace list =
     let effectiveEnd = min periodEnd DateTimeOffset.Now
 

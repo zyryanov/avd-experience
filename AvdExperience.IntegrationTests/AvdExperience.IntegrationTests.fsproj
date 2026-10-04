@@ -9,10 +9,13 @@
   <ItemGroup>
     <Compile Include="Fixtures.fs" />
     <Compile Include="FullFlowTests.fs" />
+    <Compile Include="DbFlowTests.fs" />
+    <Compile Include="ServiceFlowTests.fs" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\AvdExperience.fsproj" />
+    <ProjectReference Include="..\AvdExperience.Service\AvdExperience.Service.fsproj" />
   </ItemGroup>
 
   <ItemGroup>

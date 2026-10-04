@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="AvdExperience.Core/AvdExperience.Core.fsproj" />
+  <Project Path="AvdExperience.fsproj" />
+  <Project Path="AvdExperience.IntegrationTests/AvdExperience.IntegrationTests.fsproj" />
+  <Project Path="AvdExperience.Service/AvdExperience.Service.fsproj" />
+  <Project Path="AvdExperience.UnitTests/AvdExperience.UnitTests.fsproj" />
+</Solution>
