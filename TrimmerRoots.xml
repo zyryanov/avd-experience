@@ -1,4 +1,15 @@
 <linker>
   <assembly fullname="avd-experience" preserve="all" />
   <assembly fullname="Argu" preserve="all" />
+  <!-- F# quotation members are invisible to the trimmer: SqlHydra.Query turns the
+       `select { ... }` quotations into LINQ expression trees at runtime via FSharp.Core's
+       LeafExpressionConverter, which binds the referenced methods/properties by reflection.
+       Anything referenced only from a quotation literal (record property getters, module
+       functions like formatIso) gets stripped under TrimMode=link and reads then fail at
+       runtime with "Could not bind to method". Preserve every assembly involved. -->
+  <assembly fullname="AvdExperience.Core" preserve="all" />
+  <assembly fullname="SqlHydra.Query" preserve="all" />
+  <assembly fullname="SqlHydra.Domain" preserve="all" />
+  <assembly fullname="FastExpressionCompiler" preserve="all" />
+  <assembly fullname="FSharp.Core" preserve="all" />
 </linker>

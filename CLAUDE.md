@@ -271,4 +271,15 @@ GitHub Releases ship `avd-experience-<version>-win-x64.zip` (both exes + `e_sqli
 (native SQLite is not bundled into single-file apps). The service profile deliberately skips
 `PublishTrimmed` (trimmer is unsafe with the Windows Service host). Users extract both exes to a
 permanent folder; the CLI finds `avd-service.exe` beside itself and installs it on demand.
+
+The CLI *is* trimmed (`Properties/PublishProfiles/win-x64.pubxml`), which is only safe because of
+two guards — do not remove either, or release builds fail at runtime while dev builds and CI pass:
+- `TrimmerRoots.xml` preserves `AvdExperience.Core`, `SqlHydra.Query`, `SqlHydra.Domain`,
+  `FastExpressionCompiler`, and `FSharp.Core`. SqlHydra turns `select { ... }` quotations into
+  LINQ trees at runtime via FSharp.Core's LeafExpressionConverter, which binds the referenced
+  methods/properties by reflection; members referenced only from quotation literals are invisible
+  to the trimmer, and trimming them makes every DB read die with "Could not bind to method".
+- `JsonSerializerIsReflectionEnabledByDefault=true` in `AvdExperience.fsproj`: PublishTrimmed
+  silently disables STJ reflection serialization, breaking `toLogEvent`'s
+  `JsonSerializer.Deserialize<string list>` for `PropertiesJson`.
 ```

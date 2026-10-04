@@ -9,6 +9,9 @@
     <Description>AVD session log analyzer — active time, lost time, disruption cost</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- PublishTrimmed silently sets this to false, breaking the runtime
+         JsonSerializer.Deserialize<string list> call in DbRepository.toLogEvent. -->
+    <JsonSerializerIsReflectionEnabledByDefault>true</JsonSerializerIsReflectionEnabledByDefault>
   </PropertyGroup>
   <ItemGroup>
     <TrimmerRootDescriptor Include="TrimmerRoots.xml" />
