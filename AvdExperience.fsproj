@@ -23,13 +23,14 @@
     <Compile Include="Stats.fs" />
     <Compile Include="CsvExport.fs" />
     <Compile Include="Report.fs" />
+    <Compile Include="DateParser.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Argu" Version="6.2.5" />
-    <PackageReference Include="Spectre.Console" Version="0.55.2" />
-    <PackageReference Include="System.Diagnostics.EventLog" Version="10.0.8" />
+    <PackageReference Include="Spectre.Console" Version="0.57.2" />
+    <PackageReference Include="System.Diagnostics.EventLog" Version="10.0.12" />
   </ItemGroup>
 
 </Project>

@@ -21,7 +21,7 @@ CLI app reads Windows Event logs, analyzes Azure AVD session records:
 
 ## Architecture
 
-Seven modules, each with single concern. Compile order matches dependency order.
+Eight modules, each with single concern. Compile order matches dependency order.
 
 ```
 Elevation.fs  — UAC elevation helpers; isElevated, relaunchElevated, tryRedirectOutput;
@@ -41,6 +41,8 @@ Stats.fs      — State machine: stepState (unlocked path) + shadowStep (AVD eve
                 computeWithTrace aggregates into DayStats/PeriodStats and splits intervals by day via splitByDay
 Report.fs     — Spectre.Console colored table (printStats); state-change trace log (printTrace);
                 format helpers (fmtTime, formatDuration, stateMarkup, stateColor)
+DateParser.fs — Human-friendly relative and exact date parsing (parseDateAt / parseDate);
+                midnight and end-of-day offsets
 Program.fs    — CLI arg parsing (Argu); runMonitor for live event subscription (bootstrapState
                 seeds initial state from last 24h); run for historical range query + optional CSV
                 export; elevation redirect via tryRedirectOutput

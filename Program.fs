@@ -8,6 +8,7 @@ open AvdStats.Events
 open AvdStats.CsvExport
 open AvdStats.Stats
 open AvdStats.Report
+open AvdStats.DateParser
 
 type Args =
     | [<AltCommandLine("-s", "--from")>] Start of string
@@ -17,24 +18,12 @@ type Args =
     interface IArgParserTemplate with
         member x.Usage =
             match x with
-            | Start _ -> "start date, inclusive (yyyy-MM-dd); alias --from / -s. Default: start of today."
-            | End _   -> "end date, inclusive (yyyy-MM-dd); alias --to / -t. Default: end of today."
+            | Start _ -> "start date, inclusive (yyyy-MM-dd or relative: today, yesterday, -1d, -2w); alias --from / -s. Default: start of today."
+            | End _   -> "end date, inclusive (yyyy-MM-dd or relative: today, yesterday, -1d, -2w); alias --to / -t. Default: end of today."
             | Monitor -> "watch live event log for AVD state changes; prints each transition with timestamp and duration"
             | Csv     -> "export events and intervals to CSV files (off by default)"
 
 let private fmt (d: DateTimeOffset) = d.ToString "yyyy-MM-dd"
-
-let private localMidnight (d: DateTime) =
-    let offset = TimeZoneInfo.Local.GetUtcOffset(d)
-    DateTimeOffset(d.Year, d.Month, d.Day, 0, 0, 0, offset)
-
-let private localEndOfDay (d: DateTime) =
-    localMidnight(d.AddDays 1.0).AddTicks -1L
-
-let parseDate (s: string) =
-    match DateTime.TryParseExact(s, "yyyy-MM-dd", null, Globalization.DateTimeStyles.None) with
-    | true, d  -> Ok d
-    | false, _ -> Error (sprintf "Invalid date '%s' — expected yyyy-MM-dd" s)
 
 let channel = "Microsoft-Windows-TerminalServices-RDPClient/Operational"
 

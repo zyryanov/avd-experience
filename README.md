@@ -32,8 +32,8 @@ dotnet test AvdExperience.IntegrationTests
 
 | Flag | Aliases | Default | Description |
 |------|---------|---------|-------------|
-| `--start` | `-s`, `--from` | today | Start date, inclusive (`yyyy-MM-dd`) |
-| `--end` | `-t`, `--to` | today | End date, inclusive (`yyyy-MM-dd`) |
+| `--start` | `-s`, `--from` | today | Start date, inclusive (`yyyy-MM-dd` or relative: `today`, `yesterday`, `-1d`, `-2w`, `3 days ago`) |
+| `--end` | `-t`, `--to` | today | End date, inclusive (`yyyy-MM-dd` or relative: `today`, `yesterday`, `-1d`, `-2w`, `3 days ago`) |
 | `--monitor` | `-m` | — | Watch live event log; print each state transition with timestamp and duration |
 | `--csv` | `-c` | off | Export raw events and intervals to CSV files |
 
@@ -62,7 +62,7 @@ Primarily for debugging. Produces two files:
 
 ## Architecture
 
-Seven F# modules in dependency order:
+Eight F# modules in dependency order:
 
 ```
 Elevation.fs     — UAC self-relaunch
@@ -71,6 +71,7 @@ Events.fs        — Event ID classifiers and domain knowledge
 CsvExport.fs     — Write events/intervals to CSV
 Stats.fs         — State machine: raw events → typed intervals → DayStats/PeriodStats
 Report.fs        — Format PeriodStats for console
+DateParser.fs    — Human-friendly relative and exact date parsing
 Program.fs       — CLI arg parsing (Argu), pipeline orchestration
 ```
 
