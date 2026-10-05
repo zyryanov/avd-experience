@@ -383,3 +383,27 @@ let ``prune preserves the snapshot of an open session`` () =
             use roPruned = openReadContext prunedDb
             use roFull   = openReadContext fullDb
             loadSnapshot roPruned |> should equal (loadSnapshot roFull)
+
+[<Fact>]
+let ``prune honors the configured retention days`` () =
+    withTempDb <| fun dbPath ->
+        let gate = obj()
+        // an old pair and a fresh pair; the configured horizon must fall between them
+        let old1 = DateTimeOffset.UtcNow.AddDays -10.0
+        let old2 = old1.AddMinutes 5.0
+        let now1 = DateTimeOffset.UtcNow.AddDays -1.0
+        let now2 = now1.AddMinutes 5.0
+        appendAll dbPath gate [ rdp 1024 old1; rdp 1027 old2; rdp 1024 now1; rdp 1027 now2 ]
+
+        // retention-days is a user setting in the DB; `prune` (unlike the
+        // test-injectable pruneWith) reads it at prune time
+        do
+            use ctx = openContext dbPath
+            setRetentionDays ctx 5.0
+        prune dbPath gate logger
+
+        use ro = openReadContext dbPath
+        countEvents ro |> should equal 2
+        getAllEvents ro |> List.map (fun e -> e.Id) |> should equal [ 1024; 1027 ]
+        // the cutoff was stamped through the newest event at/before now−5d
+        getRetentionStart ro |> should equal (Some old2)

@@ -417,6 +417,34 @@ let deleteEventsAtOrBefore (ctx: QueryContext) (until: DateTimeOffset) : int =
     }
     |> ctx.Delete
 
+// ── Settings (user overrides stored as ServiceMeta rows) ──────────────────────
+// The settings store is the database itself: the service reads overrides at
+// prune time, the CLI sets them via `config` verbs, and both processes see the
+// same values — no file next to the exe that a release zip would clobber on
+// upgrade, no elevation, no service restart.
+
+/// Parse and validate a user-supplied retention value: finite days, at least 1.
+let tryParseRetentionDays (s: string) : float option =
+    match Double.TryParse(s, Globalization.NumberStyles.Float, Globalization.CultureInfo.InvariantCulture) with
+    | true, d when Double.IsFinite d && d >= 1.0 -> Some d
+    | _ -> None
+
+let retentionDaysKey = "RetentionDays"
+
+/// Effective retention in days — the user override when set and valid, else the
+/// built-in default. Read at prune time by the service; the CLI reads the same
+/// accessor for display, so there is exactly one notion of "effective".
+let getRetentionDays (ctx: QueryContext) : float =
+    tryGetMeta ctx retentionDaysKey
+    |> Option.bind tryParseRetentionDays
+    |> Option.defaultValue retentionDays
+
+let setRetentionDays (ctx: QueryContext) (days: float) : unit =
+    setMeta ctx retentionDaysKey (sprintf "%g" days)
+
+let resetRetentionDays (ctx: QueryContext) : unit =
+    deleteMeta ctx retentionDaysKey
+
 /// First-run backlog: how far back the initial event replay goes (the service's
 /// replay default and the recorded BackfillStart horizon). Lives here so the CLI
 /// can phrase its partial-history warning without referencing the service project.

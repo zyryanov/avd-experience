@@ -70,24 +70,29 @@ type IngestionWorker(logger: ILogger<IngestionWorker>, dbPath: string) =
         logger.LogInformation("AvdExperience Service monitoring events.")
 
         // Periodic derivation: keep Intervals + snapshot consistent with RawEvents.
-        // Cheap when idle — one max(RecordId) probe per tick.
+        // Cheap when idle — one max(RecordId) + retention read per tick.
         use timer = new PeriodicTimer(TimeSpan.FromSeconds 2.0)
         let mutable lastRetentionDay = DateOnly.FromDateTime DateTime.UtcNow.Date
+        let mutable lastRetentionDays =
+            use ro = openReadContext dbPath
+            getRetentionDays ro
         try
             while true do
                 let! _ = timer.WaitForNextTickAsync(ct)
-                let maxId =
+                let maxId, retentionDays =
                     use ro = openReadContext dbPath
-                    getMaxEventRecordId ro
+                    getMaxEventRecordId ro, getRetentionDays ro
                 if maxId <> lastDerivedId then
                     let _, _, _, _, derivedId = derive dbPath gate logger
                     lastDerivedId <- derivedId
-                // Retention once per day: prune raw events older than the horizon.
-                // (Deletes don't move max(RecordId), so prune re-derives itself when
-                // it actually deleted — see Retention.prune.)
+                // Retention once per UTC day — or immediately when the configured
+                // retention changes, so a shrink applies within a tick instead of
+                // waiting for the next daily run. (Deletes don't move max(RecordId),
+                // so prune re-derives itself when it actually deleted.)
                 let today = DateOnly.FromDateTime DateTime.UtcNow.Date
-                if today <> lastRetentionDay then
+                if today <> lastRetentionDay || retentionDays <> lastRetentionDays then
                     lastRetentionDay <- today
+                    lastRetentionDays <- retentionDays
                     Retention.prune dbPath gate logger
         with :? OperationCanceledException ->
             ()   // cancellation on shutdown

@@ -12,6 +12,19 @@ open AvdStats.ServiceManager
 open AvdStats.MonitorWatcher
 open AvdStats.DbRepository
 
+type ConfigArgs =
+    // CliPrefix.None on the nested cases too: the sub-parser applies its own
+    // prefix rules, so without this 'config set' would demand '--set'.
+    | [<CliPrefix(CliPrefix.None)>] Show
+    | [<CliPrefix(CliPrefix.None)>] Set of key: string * value: string
+    | [<CliPrefix(CliPrefix.None)>] Reset of key: string
+    interface IArgParserTemplate with
+        member x.Usage =
+            match x with
+            | Show   -> "show effective settings and their source"
+            | Set _  -> "set <key> <value> (e.g. 'config set retention-days 30')"
+            | Reset _ -> "reset <key> to the built-in default"
+
 type Args =
     | [<AltCommandLine("-s", "--from")>] Start of string
     | [<AltCommandLine("-t", "--to")>]   End of string
@@ -20,6 +33,7 @@ type Args =
     // CliPrefix.None makes this a bare subcommand ('service status'), so it shows
     // up in --help next to the flags and is parsed position-independently.
     | [<CliPrefix(CliPrefix.None); Unique>] Service of string
+    | [<CliPrefix(CliPrefix.None); Unique>] Config of ParseResults<ConfigArgs>
     interface IArgParserTemplate with
         member x.Usage =
             match x with
@@ -28,6 +42,7 @@ type Args =
             | Monitor -> "poll avd.db for live AVD state changes; prints each transition with timestamp and duration"
             | Csv     -> "export events and intervals to CSV files (off by default)"
             | Service _ -> "manage the background AVD service: status | start | stop | install | uninstall (e.g. 'avd-experience service status')"
+            | Config _  -> "show or change settings (e.g. 'avd-experience config set retention-days 30')"
 
 let private fmt (d: DateTimeOffset) = d.ToString "yyyy-MM-dd"
 
@@ -83,12 +98,12 @@ let private run (from: DateTimeOffset) (until: DateTimeOffset) (writeCsv: bool) 
                      "[yellow]⚠ No events before %s were ingested (the service's initial backfill reaches ~%d days back) — the report below may be incomplete.[/]"
                      (Markup.Escape (horizon.LocalDateTime.ToString "yyyy-MM-dd HH:mm")) (int initialBacklogDays))
              | _ -> ())
-            // Same for events pruned by the 90-day retention.
+            // Same for events pruned by retention.
             (match retentionStart with
              | Some horizon when from <= horizon ->
                  AnsiConsole.MarkupLine(sprintf
-                     "[yellow]⚠ Events before %s have been pruned (%d-day retention) — the report below may be incomplete.[/]"
-                     (Markup.Escape (horizon.LocalDateTime.ToString "yyyy-MM-dd HH:mm")) (int retentionDays))
+                     "[yellow]⚠ Events before %s are beyond the retention horizon — the report below may be incomplete.[/]"
+                     (Markup.Escape (horizon.LocalDateTime.ToString "yyyy-MM-dd HH:mm")))
              | _ -> ())
             AnsiConsole.MarkupLine(sprintf "[dim]Found %d events[/] [grey](%s → %s)[/]" events.Length (fmt from) (fmt until))
             let initStateClamped = initState |> Option.map (fun (kind, t) -> kind, max t from)
@@ -142,13 +157,16 @@ let private runServiceCommand (verb: string) : int =
         if File.Exists defaultDbPath then
             match tryRead defaultDbPath (fun ctx ->
                 countEvents ctx, countIntervals ctx,
-                tryGetMeta ctx backfillCompleteKey |> Option.isSome) with
-            | Ok (events, intervals, complete) ->
+                tryGetMeta ctx backfillCompleteKey |> Option.isSome,
+                getRetentionDays ctx, tryGetMeta ctx retentionDaysKey) with
+            | Ok (events, intervals, complete, days, overrideRaw) ->
                 AnsiConsole.MarkupLine(sprintf "[dim]DB:[/] %d events, %d intervals" events intervals)
                 if complete then
                     AnsiConsole.MarkupLine "[dim]Backfill:[/] complete"
                 else
                     AnsiConsole.MarkupLine "[yellow]Backfill in progress — DB counts are partial…[/]"
+                AnsiConsole.MarkupLine(sprintf "[dim]Retention:[/] %g days %s" days
+                    (match overrideRaw with Some _ -> "(configured)" | None -> "(default)"))
             | Error msg ->
                 reportDbReadError defaultDbPath msg
         0
@@ -172,6 +190,90 @@ let private runServiceCommand (verb: string) : int =
         AnsiConsole.MarkupLine(sprintf "[red]Unknown service command:[/] %s [grey](expected: status | start | stop | install | uninstall)[/]" (Markup.Escape v))
         1
 
+// ── Settings verbs (config) ──────────────────────────────────────────────────
+// Settings live in the shared DB (ServiceMeta rows), so no elevation is needed:
+// the service reads overrides at prune time and picks up changes within a tick.
+
+let private knownSettings = [ "retention-days" ]
+
+let private unknownKey (key: string) : int =
+    AnsiConsole.MarkupLine(sprintf "[red]Unknown setting:[/] %s [grey](available: %s)[/]"
+        (Markup.Escape key) (Markup.Escape (String.Join(", ", knownSettings))))
+    1
+
+let private showConfig () : int =
+    match tryRead defaultDbPath (fun ctx ->
+        getRetentionDays ctx,
+        tryGetMeta ctx retentionDaysKey,
+        getBackfillStart ctx,
+        getRetentionStart ctx) with
+    | Error msg -> reportDbReadError defaultDbPath msg; 1
+    | Ok (days, overrideRaw, backfillStart, retentionStart) ->
+        // Show the raw override so a typo in a stored value is visible, not
+        // silently masked by the built-in default.
+        let source =
+            match overrideRaw with
+            | Some raw when tryParseRetentionDays raw |> Option.isSome -> sprintf "set to %s" raw
+            | Some raw -> sprintf "set to '%s' — invalid, using default" raw
+            | None -> "default"
+        AnsiConsole.MarkupLine(sprintf "retention-days: %g [grey][%s][/]" days (Markup.Escape source))
+        let horizon = Option.map (fun (h: DateTimeOffset) -> h.LocalDateTime.ToString "yyyy-MM-dd HH:mm") >> Option.defaultValue "—"
+        AnsiConsole.MarkupLine(sprintf "[dim]Pruned through:[/] %s (events before this are deleted)" (horizon retentionStart))
+        AnsiConsole.MarkupLine(sprintf "[dim]Backfill horizon:[/] %s (no events before this were ingested)" (horizon backfillStart))
+        0
+
+let private setConfig (key: string) (value: string) : int =
+    match key with
+    | "retention-days" ->
+        match tryParseRetentionDays value with
+        | None ->
+            AnsiConsole.MarkupLine(sprintf "[red]Error:[/] invalid value '%s' for retention-days — expected a number of days, at least 1." (Markup.Escape value))
+            1
+        | Some newDays ->
+            match tryRead defaultDbPath getRetentionDays with
+            | Error msg -> reportDbReadError defaultDbPath msg; 1
+            | Ok currentDays ->
+                // Shrinking is destructive: the next prune (within a tick of the
+                // running service) permanently deletes everything below the new
+                // horizon. Lengthening is a no-op for existing data — nothing is
+                // resurrected — so it applies without confirmation.
+                if newDays < currentDays then
+                    let willPruneThrough = DateTimeOffset.UtcNow.AddDays -newDays
+                    if not (AnsiConsole.Confirm(
+                        sprintf "Retention shrinks from %g to %g days: events before %s will be permanently deleted at the next prune. Continue?"
+                            currentDays newDays (willPruneThrough.LocalDateTime.ToString "yyyy-MM-dd HH:mm"))) then
+                        AnsiConsole.MarkupLine "[yellow]Cancelled[/] — no changes made."
+                        1
+                    else
+                        use ctx = openContext defaultDbPath
+                        setRetentionDays ctx newDays
+                        AnsiConsole.MarkupLine(sprintf "[green]✓ retention-days set to[/] %g [grey](applies at the next prune)[/]" newDays)
+                        0
+                else
+                    use ctx = openContext defaultDbPath
+                    setRetentionDays ctx newDays
+                    AnsiConsole.MarkupLine(sprintf "[green]✓ retention-days set to[/] %g [grey](applies at the next prune)[/]" newDays)
+                    0
+    | k -> unknownKey k
+
+let private resetConfig (key: string) : int =
+    match key with
+    | "retention-days" ->
+        use ctx = openContext defaultDbPath
+        resetRetentionDays ctx
+        AnsiConsole.MarkupLine(sprintf "[green]✓ retention-days reset to the default %g.[/]" retentionDays)
+        0
+    | k -> unknownKey k
+
+let private runConfig (config: ParseResults<ConfigArgs>) : int =
+    if config.Contains Set then
+        let key, value = config.GetResult Set
+        setConfig key value
+    elif config.Contains Reset then
+        resetConfig (config.GetResult Reset)
+    else
+        showConfig ()   // bare `config` and `config show` both display
+
 let private runParsed (argv: string[]) =
     let parser = ArgumentParser.Create<Args>(programName = "avd-experience")
     let parsed =
@@ -182,6 +284,7 @@ let private runParsed (argv: string[]) =
     match parsed with
     | Error code -> code
     | Ok args when args.Contains Service -> runServiceCommand (args.GetResult Service)
+    | Ok args when args.Contains Config  -> runConfig (args.GetResult Config)
     | Ok args when args.Contains Monitor -> AvdStats.MonitorWatcher.run ()
     | Ok args ->
         let from =

@@ -133,6 +133,15 @@ Five projects in `AvdExperience.slnx`:
   simply re-read and re-dropped on each restart (bounded by OS log rotation). The
   CLI warns when a report window starts at/before `RetentionStart` or before
   `BackfillStart`, whichever applies.
+- Settings: user-facing knobs live as ServiceMeta rows rather than appsettings.json —
+  a file beside the exe would be clobbered by "extract the new zip over the same
+  folder" upgrades, and the service's frozen command line rules out arguments.
+  `Retention.prune` reads `RetentionDays` at prune time and the worker prunes on
+  the tick when the value changes, so a shrink applies within seconds without a
+  restart. `getRetentionDays` falls back to the built-in default when the stored
+  value is invalid (the CLI `config show` surfaces the raw override instead of
+  masking it). Shortening is destructive — the CLI confirms — while lengthening
+  resurrects nothing: `RetentionStart` stays where the last prune actually reached.
 - Warmup → live handover: `EventLogWatcher` (no bookmark) only raises events logged
   after activation, so subscriptions are enabled *before* the backlog replay and
   buffered (`LiveEventBuffer`); buffered events are drained after the replay and the
@@ -150,10 +159,11 @@ Five projects in `AvdExperience.slnx`:
 
 - `DbFlowTests` — repository roundtrips: events (incl. Properties JSON), intervals,
   watermarks, snapshots, meta, the retention seed roundtrip and inclusive cutoff
-  deletes (`deleteEventsAtOrBefore`/`getLatestTimeAtOrBefore`), the `eventExists`
-  dedup guard, canonical event order (equal timestamps → channel rank → event ID),
-  monitor record-ID queries, UTC normalization, chronological read order (inserts are
-  deliberately scrambled in one test).
+  deletes (`deleteEventsAtOrBefore`/`getLatestTimeAtOrBefore`), the retention-days
+  setting (roundtrip/reset, invalid-value fallback, `tryParseRetentionDays`
+  bounds), the `eventExists` dedup guard, canonical event order (equal timestamps →
+  channel rank → event ID), monitor record-ID queries, UTC normalization,
+  chronological read order (inserts are deliberately scrambled in one test).
 - `ServiceFlowTests` — Service↔CLI contract without live OS resources: fixture scenarios
   appended through `Ingestion.appendEvent` (same code the service runs), derived via
   `derive`, read back through the CLI read path, and compared against in-memory
@@ -163,7 +173,9 @@ Five projects in `AvdExperience.slnx`:
   overlap); DI regression (IHostedService resolves through the factory);
   retention (`pruneWith` with a fixed horizon: cutoff batch deletion, seed capture,
   pruned-vs-unpruned equality over post-cutoff windows incl. PostPause continuity,
-  idempotence, pre-cutoff append drop, snapshot preservation).
+  idempotence, pre-cutoff append drop, snapshot preservation); the settings store
+  (retention-days roundtrip/reset, invalid-value fallback, `prune` honoring the
+  configured days).
 - Retention fold tests (`RetentionTests` in UnitTests) prove the core invariant:
   folding the retained events seeded with fold(prefix) equals folding all events —
   same final state tuple and the same intervals that close after the cutoff
@@ -208,7 +220,11 @@ DbRepository.fs    — Typed SqlHydra queries & inserts; WAL init; UTC ISO times
                      getRetentionStart/getFoldSeed/saveRetentionSeed (seed storage
                      `Kind@ISO|locked|Kind@ISO|Reason`, hand-rolled — no reflection,
                      trim-safe) / getLatestTimeAtOrBefore / getEventsAtOrBefore /
-                     deleteEventsAtOrBefore (+ retentionDays)
+                     deleteEventsAtOrBefore (+ retentionDays); the settings store:
+                     retentionDaysKey/tryParseRetentionDays/getRetentionDays
+                     (override from ServiceMeta, validated, else the default)/
+                     setRetentionDays/resetRetentionDays — read at prune time by the
+                     service and by the CLI `config` verbs, so both see one value
 Ingestion.fs       — Service ingestion core (no hosting deps), append-only:
                      appendEvent (dedup-guarded transaction; drops events at/before
                      the retention cutoff without storing or advancing the watermark —
@@ -219,18 +235,22 @@ Ingestion.fs       — Service ingestion core (no hosting deps), append-only:
                      RetentionSeed → rewrite Intervals + snapshot; returns the folded
                      max RecordId as the derivation cursor), warmup = replay + derive
                      (EventLogSource is injectable so tests never touch live channels)
-Retention.fs       — 90-day RawEvents pruning (prune/pruneWith, injectable horizon for
-                     tests): cut at the newest event timestamp at/before the horizon
-                     (a whole same-timestamp batch), fold it seeded by the previous
-                     seed → RetentionSeed meta, delete at/before the cutoff, stamp
-                     RetentionStart, re-derive; runs at warmup + once per UTC day on
-                     the worker tick
+Retention.fs       — RawEvents pruning (prune/pruneWith, injectable horizon for
+                     tests): prune reads the configured retention-days setting at
+                     prune time (user override from the settings store, else the
+                     built-in default), cuts at the newest event timestamp at/before
+                     the horizon (a whole same-timestamp batch), folds it seeded by
+                     the previous seed → RetentionSeed meta, deletes at/before the
+                     cutoff, stamps RetentionStart, re-derives; runs at warmup and
+                     on the worker tick (first tick of a new UTC day, or immediately
+                     when the configured value changes)
 IngestionWorker.fs — Thin BackgroundService shell: initDatabase + backfill markers
                      (BackfillComplete readiness, BackfillStart horizon),
                      subscribe (buffered) BEFORE replay, drain, Retention.prune
                      (before the first derive), derive, mark backfill complete,
                      then periodic derive tick (every 2s when new events; the cursor
-                     is derive's folded max RecordId) + once-per-UTC-day retention
+                     is derive's folded max RecordId) + retention prune on the first
+                     tick of a new UTC day or when retention-days changes
 Hosting.fs         — configureServices/buildHost; IHostedService registered through the
                      factory (constructor injection cannot supply dbPath)
 MonitorWatcher.fs  — --monitor: ensures the service is running, waits for backfill,
@@ -240,9 +260,12 @@ MonitorWatcher.fs  — --monitor: ensures the service is running, waits for back
 CsvExport.fs       — writeEventsCsv / writeIntervalsCsv
 Report.fs          — Spectre table (printStats), trace log (printTrace), format helpers
 Program.fs         - arg parsing; `service <status|start|stop|install|uninstall>` verbs
-                     (elevation on demand); report path reads DB, no elevation; warns
-                     when the window starts before the BackfillStart horizon or at/
-                     before the RetentionStart horizon (pruned history)
+                     (elevation on demand); `config` / `config set|reset` settings
+                     verbs (write ServiceMeta from the CLI, no elevation; set confirms
+                     when shrinking retention — destructive at the next prune); report
+                     path reads DB, no elevation; warns when the window starts before
+                     the BackfillStart horizon or at/before the RetentionStart
+                     horizon (pruned history)
 ```
 
 ## IntervalKind Semantics
@@ -292,6 +315,9 @@ avd-experience --monitor                             live transitions from avd.d
 avd-experience service status                        service state + DB record counts
 avd-experience service start|stop                    start/stop (stop elevates)
 avd-experience service install|uninstall             registers/deregisters (elevates)
+avd-experience config                                settings + stamped horizons (no elevation)
+avd-experience config set retention-days 30          store override (confirms when shrinking)
+avd-experience config reset retention-days           back to the built-in default
 ```
 
 Query flow: if the service is stopped the CLI starts it (elevating only if needed);

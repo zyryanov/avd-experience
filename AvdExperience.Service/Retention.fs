@@ -70,6 +70,10 @@ let pruneWith (horizon: DateTimeOffset) (dbPath: string) (lockObj: obj) (logger:
         with ex ->
             logger.LogError(ex, "Retention prune failed"))
 
-/// Prune everything older than the retention horizon (retentionDays).
+/// Prune everything older than the configured retention horizon — the user
+/// override from the settings store when set, else the built-in default.
 let prune (dbPath: string) (lockObj: obj) (logger: ILogger) : unit =
-    pruneWith (DateTimeOffset.UtcNow.AddDays -retentionDays) dbPath lockObj logger
+    let days =
+        use ro = openReadContext dbPath
+        getRetentionDays ro
+    pruneWith (DateTimeOffset.UtcNow.AddDays -days) dbPath lockObj logger

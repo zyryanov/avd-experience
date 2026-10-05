@@ -312,3 +312,43 @@ let ``deleteEventsAtOrBefore and getLatestTimeAtOrBefore cut at whole timestamps
         getEventsInRange ro2 (t0.AddMinutes -1.0) (t0.AddMinutes 3.0)
         |> List.map (fun e -> e.Id)
         |> should equal [ 1024 ]   // only the 2-min event survives
+
+// ── Settings (retention-days) ────────────────────────────────────────────────
+
+[<Fact>]
+let ``retention-days setting roundtrips and falls back to the default`` () =
+    withTempDb <| fun dbPath ->
+        use ctx = openContext dbPath
+        getRetentionDays ctx |> should equal retentionDays   // fresh DB → built-in default
+
+        setRetentionDays ctx 30.0
+        getRetentionDays ctx |> should equal 30.0
+
+        // reset removes the override row entirely, back to the default
+        resetRetentionDays ctx
+        tryGetMeta ctx retentionDaysKey |> should equal None
+        getRetentionDays ctx |> should equal retentionDays
+
+[<Theory>]
+[<InlineData("30", true)>]
+[<InlineData("30.5", true)>]
+[<InlineData("1", true)>]
+[<InlineData("0.5", false)>]
+[<InlineData("-3", false)>]
+[<InlineData("abc", false)>]
+[<InlineData("", false)>]
+[<InlineData("NaN", false)>]
+[<InlineData("Infinity", false)>]
+let ``tryParseRetentionDays accepts finite days of at least 1`` (input: string) (valid: bool) =
+    tryParseRetentionDays input |> Option.isSome |> should equal valid
+
+[<Fact>]
+let ``an invalid stored retention value falls back to the default`` () =
+    withTempDb <| fun dbPath ->
+        use ctx = openContext dbPath
+        setMeta ctx retentionDaysKey "abc"
+        getRetentionDays ctx |> should equal retentionDays
+        setMeta ctx retentionDaysKey "0.5"
+        getRetentionDays ctx |> should equal retentionDays
+        setMeta ctx retentionDaysKey "Infinity"
+        getRetentionDays ctx |> should equal retentionDays

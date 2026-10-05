@@ -54,6 +54,7 @@ dotnet test AvdExperience.IntegrationTests
 | `--monitor` | `-m` | — | Watch the database: poll `avd.db` for live AVD state changes, print each transition with timestamp and duration; Ctrl+C to stop |
 | `--csv` | `-c` | off | Export raw events and intervals to CSV files |
 | `service <verb>` | — | — | Manage the background service: `status` (no elevation), `start`, `stop`, `install`, `uninstall` (elevate as needed) |
+| `config <verb>` | — | — | Show or change settings stored in the database (no elevation): `config`, `config show`, `config set <key> <value>`, `config reset <key>` |
 
 ## What It Reports
 
@@ -80,7 +81,19 @@ Primarily for debugging. Produces two files:
 
 ## Data Retention
 
-Raw events are kept for **90 days**. The service prunes older events once a day (and at startup), cutting at a whole event timestamp and carrying the exact state-machine state (open interval, lock flag, connect reason) forward in a seed, so reports over the retained window are identical to full-history reports — the first reconnect after a prune is still classified by its true cause. Windows starting before the pruned horizon print a warning instead of silently showing partial data.
+Raw events are kept for **90 days by default** — configurable via `avd-experience config set retention-days <days>` (the setting lives in the database, so it applies at the next prune without a service restart). The service prunes older events once a day, at startup, and immediately when the setting shrinks, cutting at a whole event timestamp and carrying the exact state-machine state (open interval, lock flag, connect reason) forward in a seed, so reports over the retained window are identical to full-history reports — the first reconnect after a prune is still classified by its true cause. Windows starting before the pruned horizon print a warning instead of silently showing partial data.
+
+Note: **shortening** the retention permanently deletes everything below the new horizon (the CLI asks for confirmation); **lengthening** does not resurrect already-pruned events.
+
+## Settings
+
+Settings live in the shared database, which keeps them in one place for both processes and makes them survive upgrades and reinstalls:
+
+```
+avd-experience config                        # effective values + their source + stamped horizons
+avd-experience config set retention-days 30  # store an override (confirms when shrinking)
+avd-experience config reset retention-days   # back to the built-in default
+```
 
 ## Architecture
 

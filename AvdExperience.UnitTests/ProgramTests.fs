@@ -98,3 +98,35 @@ let ``service parsing is position-independent`` () =
     args.GetResult Program.Service |> should equal "install"
     args.GetResult Program.Start |> should equal "2026-05-01"
 
+// ── The config subcommand ────────────────────────────────────────────────────
+
+[<Fact>]
+let ``'config show' parses as Show`` () =
+    let args = parser.ParseCommandLine [| "config"; "show" |]
+    let cfg = args.GetResult Program.Config
+    cfg.Contains Program.ConfigArgs.Show |> should equal true
+
+[<Fact>]
+let ``'config set retention-days 30' parses key and value`` () =
+    let args = parser.ParseCommandLine [| "config"; "set"; "retention-days"; "30" |]
+    let key, value = (args.GetResult Program.Config).GetResult Program.ConfigArgs.Set
+    key |> should equal "retention-days"
+    value |> should equal "30"
+
+[<Fact>]
+let ``'config reset retention-days' parses`` () =
+    let args = parser.ParseCommandLine [| "config"; "reset"; "retention-days" |]
+    (args.GetResult Program.Config).GetResult Program.ConfigArgs.Reset |> should equal "retention-days"
+
+[<Fact>]
+let ``config parsing is position-independent`` () =
+    let args = parser.ParseCommandLine [| "-s"; "2026-05-01"; "config"; "show" |]
+    (args.GetResult Program.Config).Contains Program.ConfigArgs.Show |> should equal true
+    args.GetResult Program.Start |> should equal "2026-05-01"
+
+[<Fact>]
+let ``usage lists the config subcommand and its verbs`` () =
+    let usage = parser.PrintUsage()
+    usage.Contains "config" |> should equal true
+    usage.Contains "retention-days" |> should equal true
+
