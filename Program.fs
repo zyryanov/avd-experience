@@ -279,8 +279,16 @@ let private runParsed (argv: string[]) =
     let parsed =
         try Ok (parser.ParseCommandLine argv)
         with :? ArguParseException as ex ->
-            AnsiConsole.MarkupLine(sprintf "[red]%s[/]" (Markup.Escape ex.Message))
-            Error 1
+            // Argu reports --help (top level and on subcommands) by raising an
+            // exception whose message is the help text, with ErrorCode.HelpText —
+            // print it as normal output and exit 0; genuine parse errors stay red
+            // and exit 1 (ErrorCode.CommandLine/PostProcess).
+            if ex.ErrorCode = ErrorCode.HelpText then
+                Console.WriteLine(ex.Message.TrimEnd())
+                Error 0
+            else
+                AnsiConsole.MarkupLine(sprintf "[red]%s[/]" (Markup.Escape ex.Message))
+                Error 1
     match parsed with
     | Error code -> code
     | Ok args when args.Contains Service -> runServiceCommand (args.GetResult Service)
