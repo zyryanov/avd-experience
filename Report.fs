@@ -2,6 +2,7 @@ module AvdStats.Report
 
 open System
 open Spectre.Console
+open Spectre.Console.Rendering
 open AvdStats.Stats
 
 let fmtTime (ts: TimeSpan) = sprintf "%dh %02dm" (int ts.TotalHours) ts.Minutes
@@ -70,20 +71,18 @@ let printStats (stats: PeriodStats) =
         ) |> ignore
 
     if stats.ByDay.Length > 1 then
-        table.AddEmptyRow() |> ignore
-
+        let dayCount = if stats.ByDay.Length = 1 then "1 day" else sprintf "%d days" stats.ByDay.Length
         let tIssue = if stats.TotalIssueCount > 0 then sprintf "[red bold]%s[/]" (fmtTime stats.TotalIssue) else sprintf "[dim]%s[/]" (fmtTime stats.TotalIssue)
         let tCount = if stats.TotalIssueCount > 0 then sprintf "[red bold]%d[/]" stats.TotalIssueCount      else sprintf "[dim]%d[/]" stats.TotalIssueCount
 
-        table.AddRow(
-            "[bold]TOTAL[/]",
-            sprintf "[green bold]%s[/]"      (fmtTime stats.TotalActive),
-            sprintf "[yellow bold]%s[/]"     (fmtTime stats.TotalConnecting),
-            sprintf "[steelblue1 bold]%s[/]" (fmtTime stats.TotalPaused),
-            tIssue,
-            tCount,
-            sprintf "[magenta bold]%s[/]"    (fmtTime stats.TotalReport)
-        ) |> ignore
+        let setFooter (i: int) (markup: string) = table.Columns[i].Footer <- Markup markup :> IRenderable
+        setFooter 0 (sprintf "[bold]%s[/]"              dayCount)
+        setFooter 1 (sprintf "[green bold]%s[/]"        (fmtTime stats.TotalActive))
+        setFooter 2 (sprintf "[yellow bold]%s[/]"       (fmtTime stats.TotalConnecting))
+        setFooter 3 (sprintf "[steelblue1 bold]%s[/]"   (fmtTime stats.TotalPaused))
+        setFooter 4 tIssue
+        setFooter 5 tCount
+        setFooter 6 (sprintf "[magenta bold]%s[/]"      (fmtTime stats.TotalReport))
 
     AnsiConsole.WriteLine()
     AnsiConsole.Write(table)
