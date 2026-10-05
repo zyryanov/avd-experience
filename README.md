@@ -1,6 +1,6 @@
 # AVD Experience
 
-CLI tool that reads Windows Event Logs and analyzes Azure AVD session quality — how long you were connected, and how much time was lost to drops, reconnects, and errors.
+Background Windows service + CLI that record and analyze Azure AVD session quality — how long you were connected, and how much time was lost to drops, reconnects, and errors.
 
 ## Download
 
@@ -20,8 +20,8 @@ Run `avd-experience.exe`: on first run it elevates once via UAC to install and s
 
 ## Requirements
 
-- Windows (Event Log access)
-- Admin privileges (optional — without them, the Security log is inaccessible, so workstation lock/unlock events are missing and Paused intervals from locking the screen won't be tracked)
+- Windows — the background service reads the event logs as SYSTEM, so the CLI itself needs no special privileges
+- Admin rights are only needed once, for the UAC elevation that installs/starts the service (declined elevation = no report, since there is no data source)
 
 ## Build from Source
 
@@ -29,6 +29,13 @@ Requires .NET 10 SDK.
 
 ```bash
 dotnet run -- [options]
+```
+
+To produce the release binaries (self-contained, trimmed):
+
+```bash
+dotnet publish -p:PublishProfile=win-x64                 # CLI → publish\win-x64
+dotnet publish AvdExperience.Service -c Release -p:PublishProfile=win-x64 -o publish/
 ```
 
 ### Testing
@@ -42,9 +49,9 @@ dotnet test AvdExperience.IntegrationTests
 
 | Flag | Aliases | Default | Description |
 |------|---------|---------|-------------|
-| `--start` | `-s`, `--from` | today | Start date, inclusive (`yyyy-MM-dd` or relative: `today`, `yesterday`, `-1d`, `-2w`, `3 days ago`) |
-| `--end` | `-t`, `--to` | today | End date, inclusive (`yyyy-MM-dd` or relative: `today`, `yesterday`, `-1d`, `-2w`, `3 days ago`) |
-| `--monitor` | `-m` | — | Watch live event log; print each state transition with timestamp and duration |
+| `--start` | `-s`, `--from` | today | Start date, inclusive (`yyyy-MM-dd` or relative: `today`, `yesterday`, `-1d`, `-2w`, `3 days ago`, `2 months ago`) |
+| `--end` | `-t`, `--to` | today | End date, inclusive (same formats) |
+| `--monitor` | `-m` | — | Watch the database: poll `avd.db` for live AVD state changes, print each transition with timestamp and duration; Ctrl+C to stop |
 | `--csv` | `-c` | off | Export raw events and intervals to CSV files |
 | `service <verb>` | — | — | Manage the background service: `status` (no elevation), `start`, `stop`, `install`, `uninstall` (elevate as needed) |
 
@@ -63,7 +70,7 @@ Output: console table grouped by day + period totals.
 
 **Report** is the key metric for productivity impact — it answers "how much time did AVD problems actually cost me?"
 
-> **Note:** Event log heuristics are best-effort. Some events may be misclassified — for example, a network drop during an active session can look like a user disconnect, inflating Issue time, or a lock event missing admin access skips Paused classification entirely. Treat reported numbers as estimates, not exact measurements.
+> **Note:** Event log heuristics are best-effort. Some events may be misclassified — for example, a network drop during an active session can look like a user disconnect, inflating Issue time. Treat reported numbers as estimates, not exact measurements.
 
 ### CSV Export
 
@@ -73,24 +80,39 @@ Primarily for debugging. Produces two files:
 
 ## Architecture
 
-Eight F# modules in dependency order:
+Service + CLI over a local SQLite database. The service ingests; the CLI reads — it never touches the Event Log.
+
+Five projects in `AvdExperience.slnx`:
 
 ```
-Elevation.fs     — UAC self-relaunch
-EventLog.fs      — Windows Event Log I/O (XPath queries)
-Events.fs        — Event ID classifiers and domain knowledge
-CsvExport.fs     — Write events/intervals to CSV
-Stats.fs         — State machine: raw events → typed intervals → DayStats/PeriodStats
-Report.fs        — Format PeriodStats for console
-DateParser.fs    — Human-friendly relative and exact date parsing
-Program.fs       — CLI arg parsing (Argu), pipeline orchestration
+AvdExperience.Core/      shared library
+  EventLog.fs     — Windows Event Log I/O (XPath queries) — service-side only
+  Events.fs       — event ID classifiers and domain knowledge
+  Stats.fs        — state machine: raw events → typed intervals → DayStats/PeriodStats
+  DateParser.fs   — human-friendly relative and exact date parsing
+  DbRepository.fs — SQLite access (WAL mode) via SqlHydra; typed queries/inserts
+
+AvdExperience.Service/   avd-service.exe — Windows service (SYSTEM, auto-start)
+  Ingestion.fs / IngestionWorker.fs — subscribe to event channels, append RawEvents
+  to avd.db, re-derive Intervals periodically (eventual consistency within ~2s)
+
+(root)                   avd-experience.exe — the CLI
+  Elevation.fs     — UAC self-relaunch
+  ServiceManager.fs — install/start/stop the service; grants users access to the DB folder
+  CsvExport.fs     — write events/intervals to CSV
+  Report.fs        — format PeriodStats for console (Spectre.Console)
+  MonitorWatcher.fs — --monitor: poll avd.db for state transitions
+  Program.fs       — CLI arg parsing (Argu), pipeline orchestration
 ```
 
-Event sources: `TerminalServices-RDPClient/Operational`, `System` (power), `Security` (lock/unlock).
+Data flow: the service subscribes to `TerminalServices-RDPClient/Operational`, `System` (power), and `Security` (lock/unlock) and appends raw events to `avd.db` in `%ProgramData%\AvdExperience`; it periodically folds all events through the state machine (`Stats.fs`) and rewrites derived intervals. The CLI reads the database read-only for reports, CSV export, and `--monitor`.
 
 ## Key Types
 
 - `LogEvent` — raw event (Id, TimeCreated, Provider, Message, Properties)
 - `IntervalKind` — `Active | Connecting | Paused | Issue`
+- `ConnectReason` — `Initial | PostIssue | PostPause`; why the current connect started (drives the Report metric)
 - `Interval` — typed span with start/end timestamps
+- `DayStats` — per-day aggregates: active/connecting/paused/issue times, issue count, report time
 - `PeriodStats` — aggregated stats with per-day breakdown
+- `EventTrace` — single event with state-machine context (state before/after, closed interval, Report contribution)
