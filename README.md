@@ -78,6 +78,10 @@ Primarily for debugging. Produces two files:
 - `avd-events-<from>--<to>.csv` — every relevant event with state machine context
 - `avd-events-<from>--<to>-intervals.csv` — typed intervals with durations
 
+## Data Retention
+
+Raw events are kept for **90 days**. The service prunes older events once a day (and at startup), cutting at a whole event timestamp and carrying the exact state-machine state (open interval, lock flag, connect reason) forward in a seed, so reports over the retained window are identical to full-history reports — the first reconnect after a prune is still classified by its true cause. Windows starting before the pruned horizon print a warning instead of silently showing partial data.
+
 ## Architecture
 
 Service + CLI over a local SQLite database. The service ingests; the CLI reads — it never touches the Event Log.

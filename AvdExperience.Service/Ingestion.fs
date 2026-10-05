@@ -5,7 +5,7 @@ module AvdStats.Service.Ingestion
 // order is irrelevant — Intervals and StateSnapshots are DERIVED views recomputed
 // from the stored events in the canonical order by `derive`, so out-of-order live
 // delivery can never corrupt persisted state, and restarts need no snapshot
-// restore (the fold over RawEvents *is* the state).
+// restore (the fold over RawEvents, continued from the retention seed, *is* the state).
 // Kept free of hosting concerns (BackgroundService, DI) so it can be
 // integration-tested directly; IngestionWorker.fs is the thin hosted shell.
 
@@ -73,6 +73,13 @@ type LiveEventBuffer(lockObj: obj, handle: string -> LogEvent -> unit) =
 /// boundary events, the warmup→live handover overlap, and watcher re-delivery
 /// are all skipped. This is the single write path for live and replayed events.
 ///
+/// Events at/before the retention cutoff are dropped without being stored or
+/// advancing the watermark: the retention seed already summarizes everything
+/// before the cutoff, and re-arrived old events (backlog replay after a long
+/// outage, clock skew) would otherwise fold *backward* on top of the seed state
+/// and corrupt the derivation. Watermarks are left untouched — a dropped event
+/// is simply re-read and re-dropped on each restart (bounded by OS log rotation).
+///
 /// Failure semantics: a failed transaction rolls back (watermark not advanced), so
 /// a failed *replayed* append is re-read from the event log on the next restart.
 /// A failed *live* append is not redelivered by the watcher — it is recovered by
@@ -88,6 +95,12 @@ let appendEvent (dbPath: string) (lockObj: obj) (logger: ILogger) (channel: stri
 
             if eventExists ctx channel e then
                 logger.LogDebug("Skipping already-stored event #{EventId} from {Channel}", e.Id, channel)
+            elif tryGetMeta ctx retentionStartKey
+                 |> Option.map parseIso
+                 |> Option.exists (fun cutoff -> e.TimeCreated <= cutoff) then
+                logger.LogInformation(
+                    "Skipping event #{EventId} from {Channel}: logged at {Time} — before the retention cutoff",
+                    e.Id, channel, e.TimeCreated)
             else
                 saveEvent ctx channel e
                 upsertWatermark ctx channel e.TimeCreated
@@ -143,10 +156,14 @@ let replayPendingPasses (source: EventLogSource) (dbPath: string) (lockObj: obj)
 /// can include an event appended mid-derive and mark it derived before it is.
 let derive (dbPath: string) (lockObj: obj) (logger: ILogger)
     : (IntervalKind * DateTimeOffset) option * bool * (IntervalKind * DateTimeOffset) option * ConnectReason option * int64 =
-    let rows =
+    let rows, seed =
         use ro = openReadContext dbPath
-        getAllEventRows ro
-    let closed, st, lk, sh, rs = foldHistory None false None None (rows |> List.map (fun (_, _, e) -> e))
+        getAllEventRows ro, getFoldSeed ro
+    // Continued from the retention seed, not from nothing: pruning removes old
+    // events, and the seed carries the exact machine state at the cutoff, so the
+    // fold over the retained history is identical to the fold over all of it.
+    let closed, st, lk, sh, rs =
+        foldHistory seed.State seed.Locked seed.Shadow seed.Reason (rows |> List.map (fun (_, _, e) -> e))
     let maxRecordId = rows |> List.fold (fun acc (rid, _, _) -> max acc rid) 0L
 
     lock lockObj (fun () ->

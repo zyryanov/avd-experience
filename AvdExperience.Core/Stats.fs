@@ -8,6 +8,21 @@ type IntervalKind = Active | Connecting | Paused | Issue
 
 type ConnectReason = Initial | PostIssue | PostPause
 
+/// Everything the state machine "remembers" between events — exactly what
+/// foldState/foldHistory take to continue a fold. Retention persists this at the
+/// pruning cutoff so folds over the retained history are identical to folds over
+/// the full history (stepState never returns the state to None once a session has
+/// started, so retained folds must be seeded, not restarted).
+type FoldSeed = {
+    State: (IntervalKind * DateTimeOffset) option
+    Locked: bool
+    Shadow: (IntervalKind * DateTimeOffset) option
+    Reason: ConnectReason option
+}
+
+/// Fold from nothing — a fresh install (or an unpruned DB) has no seed.
+let emptySeed = { State = None; Locked = false; Shadow = None; Reason = None }
+
 type Interval = {
     Kind: IntervalKind
     Start: DateTimeOffset

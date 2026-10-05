@@ -38,10 +38,11 @@ let private nextAvailablePath (baseName: string) (ext: string) =
     Seq.initInfinite id |> Seq.map candidate |> Seq.find (not << File.Exists)
 
 /// Fold the state machine over all events stored before `at` to derive the state
-/// at the start of a report window.
-let private deriveStateAt (ctx: QueryContext) (at: DateTimeOffset) : (IntervalKind * DateTimeOffset) option * bool * ConnectReason option =
+/// at the start of a report window — continued from the retention seed, so windows
+/// after the last prune see exactly the full-history state.
+let private deriveStateAt (ctx: QueryContext) (seed: FoldSeed) (at: DateTimeOffset) : (IntervalKind * DateTimeOffset) option * bool * ConnectReason option =
     getEventsBefore ctx at
-    |> foldState None false None None
+    |> foldState seed.State seed.Locked seed.Shadow seed.Reason
     |> (fun (st, lk, _, reason) -> st, lk, reason)
 
 let private run (from: DateTimeOffset) (until: DateTimeOffset) (writeCsv: bool) : int =
@@ -65,13 +66,14 @@ let private run (from: DateTimeOffset) (until: DateTimeOffset) (writeCsv: bool) 
         // surface as a friendly message instead of a crash.
         match tryRead dbPath (fun ctx ->
             let events = getEventsInRange ctx from until
-            let initState, initLocked, initReason = deriveStateAt ctx from
+            let initState, initLocked, initReason = deriveStateAt ctx (getFoldSeed ctx) from
             let backfillStart = getBackfillStart ctx
-            events, initState, initLocked, initReason, backfillStart) with
+            let retentionStart = getRetentionStart ctx
+            events, initState, initLocked, initReason, backfillStart, retentionStart) with
         | Error msg ->
             reportDbReadError dbPath msg
             1
-        | Ok (events, initState, initLocked, initReason, backfillStart) ->
+        | Ok (events, initState, initLocked, initReason, backfillStart, retentionStart) ->
             // The service only ingests a bounded backlog on first run; a window that
             // starts before that horizon cannot be complete — say so explicitly
             // instead of silently printing a partial report.
@@ -80,6 +82,13 @@ let private run (from: DateTimeOffset) (until: DateTimeOffset) (writeCsv: bool) 
                  AnsiConsole.MarkupLine(sprintf
                      "[yellow]⚠ No events before %s were ingested (the service's initial backfill reaches ~%d days back) — the report below may be incomplete.[/]"
                      (Markup.Escape (horizon.LocalDateTime.ToString "yyyy-MM-dd HH:mm")) (int initialBacklogDays))
+             | _ -> ())
+            // Same for events pruned by the 90-day retention.
+            (match retentionStart with
+             | Some horizon when from <= horizon ->
+                 AnsiConsole.MarkupLine(sprintf
+                     "[yellow]⚠ Events before %s have been pruned (%d-day retention) — the report below may be incomplete.[/]"
+                     (Markup.Escape (horizon.LocalDateTime.ToString "yyyy-MM-dd HH:mm")) (int retentionDays))
              | _ -> ())
             AnsiConsole.MarkupLine(sprintf "[dim]Found %d events[/] [grey](%s → %s)[/]" events.Length (fmt from) (fmt until))
             let initStateClamped = initState |> Option.map (fun (kind, t) -> kind, max t from)

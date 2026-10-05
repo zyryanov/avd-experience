@@ -54,6 +54,11 @@ type IngestionWorker(logger: ILogger<IngestionWorker>, dbPath: string) =
         replayPendingPasses defaultSource dbPath gate logger
         buffer.StopBuffering()
 
+        // Retention before the first derive: prune the raw events older than the
+        // horizon (seeding the retained fold with the exact state at the cutoff)
+        // so the first derive below folds the post-prune event set.
+        Retention.prune dbPath gate logger
+
         // The derivation cursor must come from the same snapshot derive folded:
         // probing max(RecordId) afterwards could include an event appended mid-derive
         // and mark it derived before it actually is — the tick would then never
@@ -67,6 +72,7 @@ type IngestionWorker(logger: ILogger<IngestionWorker>, dbPath: string) =
         // Periodic derivation: keep Intervals + snapshot consistent with RawEvents.
         // Cheap when idle — one max(RecordId) probe per tick.
         use timer = new PeriodicTimer(TimeSpan.FromSeconds 2.0)
+        let mutable lastRetentionDay = DateOnly.FromDateTime DateTime.UtcNow.Date
         try
             while true do
                 let! _ = timer.WaitForNextTickAsync(ct)
@@ -76,6 +82,13 @@ type IngestionWorker(logger: ILogger<IngestionWorker>, dbPath: string) =
                 if maxId <> lastDerivedId then
                     let _, _, _, _, derivedId = derive dbPath gate logger
                     lastDerivedId <- derivedId
+                // Retention once per day: prune raw events older than the horizon.
+                // (Deletes don't move max(RecordId), so prune re-derives itself when
+                // it actually deleted — see Retention.prune.)
+                let today = DateOnly.FromDateTime DateTime.UtcNow.Date
+                if today <> lastRetentionDay then
+                    lastRetentionDay <- today
+                    Retention.prune dbPath gate logger
         with :? OperationCanceledException ->
             ()   // cancellation on shutdown
         logger.LogInformation("AvdExperience Service stopping.")

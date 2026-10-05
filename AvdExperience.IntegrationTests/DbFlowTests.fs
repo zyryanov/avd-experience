@@ -271,3 +271,44 @@ let ``range queries compare by instant across different UTC offsets`` () =
         getEventsInRange ro atPlus2 atPlus2
         |> List.map (fun e -> e.Id)
         |> should equal [ 1027 ]
+
+// ── Retention seed ───────────────────────────────────────────────────────────
+
+[<Fact>]
+let ``retention seed roundtrips through ServiceMeta and defaults to empty`` () =
+    withTempDb <| fun dbPath ->
+        use ctx = openContext dbPath
+        getFoldSeed ctx |> should equal emptySeed   // nothing pruned → fold from nothing
+
+        let t = DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero)
+        let seed = { State = Some (Paused, t); Locked = true
+                     Shadow = Some (Issue, t.AddMinutes 5.0); Reason = Some PostIssue }
+        saveRetentionSeed ctx seed
+        getFoldSeed ctx |> should equal seed
+
+        // An all-empty seed roundtrips too (locked=false, no state/shadow/reason)
+        saveRetentionSeed ctx emptySeed
+        getFoldSeed ctx |> should equal emptySeed
+
+[<Fact>]
+let ``deleteEventsAtOrBefore and getLatestTimeAtOrBefore cut at whole timestamps`` () =
+    withTempDb <| fun dbPath ->
+        use ctx = openContext dbPath
+        saveEvent ctx rdpChannel (makeEvent 1024 (t0.AddMinutes 0.0) [])
+        saveEvent ctx rdpChannel (makeEvent 1027 (t0.AddMinutes 1.0) [])
+        saveEvent ctx securityChannel (makeEvent 4800 (t0.AddMinutes 1.0) [])   // same timestamp as 1027
+        saveEvent ctx rdpChannel (makeEvent 1024 (t0.AddMinutes 2.0) [])
+
+        use ro = openReadContext dbPath
+        getLatestTimeAtOrBefore ro (t0.AddMinutes 1.5) |> should equal (Some (t0.AddMinutes 1.0))
+        getLatestTimeAtOrBefore ro (t0.AddMinutes -1.0) |> should equal None
+
+        // boundary is inclusive: everything at/before the cutoff goes, including
+        // the same-timestamp sibling
+        use wc = openContext dbPath
+        deleteEventsAtOrBefore wc (t0.AddMinutes 1.0) |> ignore
+
+        use ro2 = openReadContext dbPath
+        getEventsInRange ro2 (t0.AddMinutes -1.0) (t0.AddMinutes 3.0)
+        |> List.map (fun e -> e.Id)
+        |> should equal [ 1024 ]   // only the 2-min event survives

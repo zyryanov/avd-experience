@@ -11,6 +11,7 @@
 
   <ItemGroup>
     <Compile Include="Ingestion.fs" />
+    <Compile Include="Retention.fs" />
     <Compile Include="IngestionWorker.fs" />
     <Compile Include="Hosting.fs" />
     <Compile Include="Program.fs" />

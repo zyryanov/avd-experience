@@ -17,6 +17,9 @@ AvdExperience.Service (avd-service.exe, NT AUTHORITY\SYSTEM, auto-start)
     → appends RawEvents + channel watermarks (arrival order irrelevant)
     → periodic derive(): fold RawEvents in canonical order (Stats.fs)
       → rewrites Intervals + StateSnapshot in avd.db (%ProgramData%\AvdExperience, WAL mode)
+    → Retention.prune (startup + daily): deletes RawEvents older than 90d,
+      persisting the exact machine state at the cutoff as the RetentionSeed
+      so folds over the retained history continue the full-history fold
 
 AvdExperience (avd-experience.exe, standard user, never elevated for queries)
     reads avd.db read-only via SqlHydra → Spectre.Console report / CSV / monitor
@@ -61,7 +64,8 @@ Five projects in `AvdExperience.slnx`:
   in `.config/dotnet-tools.json`, template in `template.db` + `sqlhydra-sqlite.toml`),
   DbRepository (typed queries/inserts, shared by service & CLI)
 - `AvdExperience.Service/` — Windows Service host: IngestionWorker (BackgroundService),
-  Program (Host.UseWindowsService, service name `AvdExperienceService`)
+  Program (Host.UseWindowsService, service name `AvdExperienceService`), Retention
+  (90-day RawEvents pruning)
 - `AvdExperience/` (root) — frontend CLI: Elevation, ServiceManager (ServiceController +
   sc.exe install/uninstall + icacls ACL), CsvExport, Report, MonitorWatcher (DB polling),
   Program
@@ -73,6 +77,9 @@ Five projects in `AvdExperience.slnx`:
 - `QueryError` — `AccessDenied | ChannelNotFound of string | QueryFailed of string`
 - `IntervalKind` — `Active | Connecting | Paused | Issue`
 - `ConnectReason` — `Initial | PostIssue | PostPause`; tracks why the current connect started to compute disruption cost
+- `FoldSeed` — everything the state machine remembers between events (`State`, `Locked`,
+  `Shadow`, `Reason`); `emptySeed` folds from nothing. Retention persists it at the
+  pruning cutoff so folds over the retained history equal folds over the full history
 - `Interval` — typed span (`Kind`, `Start`, `End`; duration = `End - Start`)
 - `DayStats` — per-day aggregates: `ActiveTime`, `ConnectingTime`, `PausedTime`, `IssueTime`, `IssueCount`, `ReportTime`
 - `PeriodStats` — `ByDay: DayStats list` + period totals incl. `TotalReport`
@@ -104,6 +111,28 @@ Five projects in `AvdExperience.slnx`:
   RecordId of the snapshot it folded — the worker's derivation cursor must come from
   that value, never a later max(RecordId) probe (a probe read after the fold can
   include an event appended mid-derive and mark it derived before it is).
+  The fold is seeded from the `RetentionSeed` (empty = fold-from-nothing) so a
+  pruned DB continues the full-history fold — `stepState` never returns the state
+  to `None` once a session has started, so retained folds must be seeded, not
+  restarted.
+- Retention (90 days): `Retention.prune` runs at warmup (after the replay) and once
+  per UTC day on the derive tick. It cuts at the newest event timestamp at/before
+  the horizon — a whole same-timestamp batch (canonical order folds siblings
+  together, so the seed must follow a complete batch) — by folding everything up
+  to that boundary (seeded by the previous seed, chained across prunes), storing
+  the result as the `RetentionSeed` meta, deleting `RawEvents WHERE TimeCreated
+  <= cutoff`, stamping `RetentionStart`, and re-deriving (deletes don't move
+  max(RecordId), so the tick can't notice by itself). This makes
+  `fold(retained, seed)` identical to `fold(full history)` from the cutoff onward
+  — a left-fold identity — including the connect-reason chain (the first
+  post-cutoff reconnect keeps its true PostPause/PostIssue classification) and
+  intervals open at the cutoff (true start preserved). The append path drops
+  events at/before `RetentionStart` without storing them or advancing the
+  watermark: re-arrived old events (replay after a long outage, clock skew) would
+  otherwise fold backward on top of the seed and corrupt the derivation; they are
+  simply re-read and re-dropped on each restart (bounded by OS log rotation). The
+  CLI warns when a report window starts at/before `RetentionStart` or before
+  `BackfillStart`, whichever applies.
 - Warmup → live handover: `EventLogWatcher` (no bookmark) only raises events logged
   after activation, so subscriptions are enabled *before* the backlog replay and
   buffered (`LiveEventBuffer`); buffered events are drained after the replay and the
@@ -120,17 +149,25 @@ Five projects in `AvdExperience.slnx`:
 ## Testing Conventions
 
 - `DbFlowTests` — repository roundtrips: events (incl. Properties JSON), intervals,
-  watermarks, snapshots, meta, the `eventExists` dedup guard, canonical event order
-  (equal timestamps → channel rank → event ID), monitor record-ID queries, UTC
-  normalization, chronological read order (inserts are deliberately scrambled in
-  one test).
+  watermarks, snapshots, meta, the retention seed roundtrip and inclusive cutoff
+  deletes (`deleteEventsAtOrBefore`/`getLatestTimeAtOrBefore`), the `eventExists`
+  dedup guard, canonical event order (equal timestamps → channel rank → event ID),
+  monitor record-ID queries, UTC normalization, chronological read order (inserts are
+  deliberately scrambled in one test).
 - `ServiceFlowTests` — Service↔CLI contract without live OS resources: fixture scenarios
   appended through `Ingestion.appendEvent` (same code the service runs), derived via
   `derive`, read back through the CLI read path, and compared against in-memory
   `computeWithTrace`; derivation order-independence (reversed appends, late-arriving
   events); restart tests (watermark no-duplicate, same-timestamp sibling replay,
   backward-watermark dedup); warmup→live handover (`LiveEventBuffer` with replay
-  overlap); DI regression (IHostedService resolves through the factory).
+  overlap); DI regression (IHostedService resolves through the factory);
+  retention (`pruneWith` with a fixed horizon: cutoff batch deletion, seed capture,
+  pruned-vs-unpruned equality over post-cutoff windows incl. PostPause continuity,
+  idempotence, pre-cutoff append drop, snapshot preservation).
+- Retention fold tests (`RetentionTests` in UnitTests) prove the core invariant:
+  folding the retained events seeded with fold(prefix) equals folding all events —
+  same final state tuple and the same intervals that close after the cutoff
+  (property test + deterministic same-timestamp-batch and PostPause cases).
 - Service logic tests use an injectable `EventLogSource` (`fun ch _ _ -> []` or filtered
   fixtures) — never query real event channels in tests.
 - Fake sources must filter events by channel (`channelOf`), matching real per-channel
@@ -166,20 +203,34 @@ DbRepository.fs    — Typed SqlHydra queries & inserts; WAL init; UTC ISO times
                      getAllEvents/getEventsInRange/getEventsBefore/getAllIntervals/
                      getIntervalsInRange/getEventsAfterRecordId/getMaxEventRecordId/
                      counts; backfillCompleteKey/backfillStartKey/getBackfillStart
-                     (+ initialBacklogDays) — service-meta markers shared with the CLI
+                     (+ initialBacklogDays) — service-meta markers shared with the CLI,
+                     plus the retention queries: retentionSeedKey/retentionStartKey/
+                     getRetentionStart/getFoldSeed/saveRetentionSeed (seed storage
+                     `Kind@ISO|locked|Kind@ISO|Reason`, hand-rolled — no reflection,
+                     trim-safe) / getLatestTimeAtOrBefore / getEventsAtOrBefore /
+                     deleteEventsAtOrBefore (+ retentionDays)
 Ingestion.fs       — Service ingestion core (no hosting deps), append-only:
-                     appendEvent (dedup-guarded transaction; failed live appends are
-                     recovered only while the watermark hasn't advanced past them),
+                     appendEvent (dedup-guarded transaction; drops events at/before
+                     the retention cutoff without storing or advancing the watermark —
+                     they would fold backward on top of the seed; failed live appends
+                     are recovered only while the watermark hasn't advanced past them),
                      LiveEventBuffer (lossless warmup→live handover), replayPending(…Passes)
-                     (inclusive watermark replay), derive (canonical fold → rewrite
-                     Intervals + snapshot; returns the folded max RecordId as the
-                     derivation cursor), warmup = replay + derive (EventLogSource
-                     is injectable so tests never touch live channels)
+                     (inclusive watermark replay), derive (canonical fold from the
+                     RetentionSeed → rewrite Intervals + snapshot; returns the folded
+                     max RecordId as the derivation cursor), warmup = replay + derive
+                     (EventLogSource is injectable so tests never touch live channels)
+Retention.fs       — 90-day RawEvents pruning (prune/pruneWith, injectable horizon for
+                     tests): cut at the newest event timestamp at/before the horizon
+                     (a whole same-timestamp batch), fold it seeded by the previous
+                     seed → RetentionSeed meta, delete at/before the cutoff, stamp
+                     RetentionStart, re-derive; runs at warmup + once per UTC day on
+                     the worker tick
 IngestionWorker.fs — Thin BackgroundService shell: initDatabase + backfill markers
                      (BackfillComplete readiness, BackfillStart horizon),
-                     subscribe (buffered) BEFORE replay, drain, derive, mark backfill
-                     complete, then periodic derive tick (every 2s when new events;
-                     the cursor is derive's folded max RecordId)
+                     subscribe (buffered) BEFORE replay, drain, Retention.prune
+                     (before the first derive), derive, mark backfill complete,
+                     then periodic derive tick (every 2s when new events; the cursor
+                     is derive's folded max RecordId) + once-per-UTC-day retention
 Hosting.fs         — configureServices/buildHost; IHostedService registered through the
                      factory (constructor injection cannot supply dbPath)
 MonitorWatcher.fs  — --monitor: ensures the service is running, waits for backfill,
@@ -188,9 +239,10 @@ MonitorWatcher.fs  — --monitor: ensures the service is running, waits for back
                      order), prints transitions; Ctrl+C to stop
 CsvExport.fs       — writeEventsCsv / writeIntervalsCsv
 Report.fs          — Spectre table (printStats), trace log (printTrace), format helpers
-Program.fs         — arg parsing; `service <status|start|stop|install|uninstall>` verbs
+Program.fs         - arg parsing; `service <status|start|stop|install|uninstall>` verbs
                      (elevation on demand); report path reads DB, no elevation; warns
-                     when the window starts before the BackfillStart horizon
+                     when the window starts before the BackfillStart horizon or at/
+                     before the RetentionStart horizon (pruned history)
 ```
 
 ## IntervalKind Semantics

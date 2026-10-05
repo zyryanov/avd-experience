@@ -333,6 +333,90 @@ let backfillStartKey = "BackfillStart"
 let getBackfillStart (ctx: QueryContext) : DateTimeOffset option =
     tryGetMeta ctx backfillStartKey |> Option.map parseIso
 
+// ── Retention (pruning of RawEvents older than retentionDays) ─────────────────
+
+/// How long raw events are kept. Lives here (like initialBacklogDays) so the CLI
+/// can phrase its pruned-history warning without referencing the service project.
+let retentionDays = 90.0
+
+let retentionSeedKey = "RetentionSeed"
+let retentionStartKey = "RetentionStart"
+
+/// When the CLI can rely on: report windows starting before either horizon are
+/// incomplete. BackfillStart = never ingested (initial backlog); RetentionStart =
+/// ingested but pruned since. Absent keys don't constrain.
+let getRetentionStart (ctx: QueryContext) : DateTimeOffset option =
+    tryGetMeta ctx retentionStartKey |> Option.map parseIso
+
+/// Seed storage format: `Kind@ISO|locked|Kind@ISO|Reason`, empty segment for an
+/// absent component — deliberately hand-rolled instead of System.Text.Json so the
+/// trimmed CLI (which reads the seed in deriveStateAt) gets no new
+/// reflection-dependent type (see CLAUDE.md's trimmer guards).
+let seedToJson (seed: FoldSeed) : string =
+    let part = function
+        | Some (k, t) -> sprintf "%s@%s" (intervalKindToString k) (formatIso t)
+        | None        -> ""
+    sprintf "%s|%b|%s|%s"
+        (part seed.State) seed.Locked (part seed.Shadow)
+        (seed.Reason |> Option.map connectReasonToString |> Option.defaultValue "")
+
+let seedOfJson (s: string) : FoldSeed =
+    match s.Split('|') with
+    | [| state; locked; shadow; reason |] ->
+        let kindAndStart (seg: string) =
+            match seg.Split('@') with
+            | [| k; t |] -> Some (parseIntervalKind k, parseIso t)
+            | _          -> None
+        { State  = kindAndStart state
+          Locked = Boolean.Parse locked
+          Shadow = kindAndStart shadow
+          Reason = if reason = "" then None else Some (parseConnectReason reason) }
+    | _ -> failwithf "Malformed retention seed: %s" s
+
+/// The seed folds must continue from — empty (fold-from-nothing) when nothing has
+/// ever been pruned. Shared by the service derivation, the monitor and the CLI.
+let getFoldSeed (ctx: QueryContext) : FoldSeed =
+    tryGetMeta ctx retentionSeedKey |> Option.map seedOfJson |> Option.defaultValue emptySeed
+
+let saveRetentionSeed (ctx: QueryContext) (seed: FoldSeed) : unit =
+    setMeta ctx retentionSeedKey (seedToJson seed)
+
+/// Newest event timestamp at/before `at` — the retention cutoff candidate. The
+/// prune cuts between whole same-timestamp batches (canonical order folds
+/// siblings together), so the cutoff is always an event timestamp, never mid-batch.
+let getLatestTimeAtOrBefore (ctx: QueryContext) (at: DateTimeOffset) : DateTimeOffset option =
+    select {
+        for e in RawEvents do
+        where (e.TimeCreated <= formatIso at)
+        orderByDescending e.TimeCreated
+        take 1
+        select e
+    }
+    |> ctx.Select
+    |> Seq.tryHead
+    |> Option.map (fun e -> parseIso e.TimeCreated)
+
+/// Events at/before `until`, in canonical order — the retention seed fold's input.
+let getEventsAtOrBefore (ctx: QueryContext) (until: DateTimeOffset) : LogEvent list =
+    select {
+        for e in RawEvents do
+        where (e.TimeCreated <= formatIso until)
+        orderBy e.TimeCreated
+        select e
+    }
+    |> ctx.Select
+    |> Seq.toList
+    |> canonicalize
+
+/// Delete every raw event at/before `until` (the pruning cutoff). Returns the
+/// number of rows deleted.
+let deleteEventsAtOrBefore (ctx: QueryContext) (until: DateTimeOffset) : int =
+    delete {
+        for e in RawEvents do
+        where (e.TimeCreated <= formatIso until)
+    }
+    |> ctx.Delete
+
 /// First-run backlog: how far back the initial event replay goes (the service's
 /// replay default and the recorded BackfillStart horizon). Lives here so the CLI
 /// can phrase its partial-history warning without referencing the service project.

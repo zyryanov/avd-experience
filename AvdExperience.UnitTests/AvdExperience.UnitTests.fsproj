@@ -12,6 +12,7 @@
     <Compile Include="StatsTests.fs" />
     <Compile Include="ProgramTests.fs" />
     <Compile Include="ComputeWithTraceTests.fs" />
+    <Compile Include="RetentionTests.fs" />
     <Compile Include="PropertyTests.fs" />
   </ItemGroup>
 

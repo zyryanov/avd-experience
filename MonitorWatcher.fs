@@ -20,7 +20,8 @@ let private keyOf (channel: string) (e: LogEvent) : DateTimeOffset * int * int =
 
 /// The monitor's state definition matches the service's derivation exactly: fold
 /// ALL stored events in canonical order (no wall-clock cutoff — canonical order is
-/// by stored timestamp, so a clock-skewed future event simply sorts last).
+/// by stored timestamp, so a clock-skewed future event simply sorts last),
+/// continued from the retention seed so a pruned DB still folds the full history.
 /// Also returns the highest folded RecordId and the canonical key of the last
 /// folded event:
 ///  - the RecordId cursor comes from the same read as the state, so an event
@@ -30,7 +31,9 @@ let private keyOf (channel: string) (e: LogEvent) : DateTimeOffset * int * int =
 let private currentState (ctx: QueryContext)
     : (IntervalKind * DateTimeOffset) option * bool * (IntervalKind * DateTimeOffset) option * ConnectReason option * int64 * (DateTimeOffset * int * int) option =
     let rows = getAllEventRows ctx
-    let state, locked, shadow, reason = rows |> List.map (fun (_, _, e) -> e) |> foldState None false None None
+    let seed = getFoldSeed ctx
+    let state, locked, shadow, reason =
+        rows |> List.map (fun (_, _, e) -> e) |> foldState seed.State seed.Locked seed.Shadow seed.Reason
     let maxRecordId = rows |> List.fold (fun acc (rid, _, _) -> max acc rid) 0L
     let lastKey = rows |> List.tryLast |> Option.map (fun (_, ch, e) -> keyOf ch e)
     state, locked, shadow, reason, maxRecordId, lastKey

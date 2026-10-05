@@ -20,6 +20,7 @@ open AvdStats.DbRepository
 open AvdStats.IntegrationTests.Fixtures
 open AvdStats.Service.Ingestion
 open AvdStats.Service.IngestionWorker
+open AvdStats.Service.Retention
 
 let private logger = NullLogger.Instance :> ILogger
 
@@ -32,12 +33,14 @@ let private channelOf (e: LogEvent) =
 let private appendAll dbPath gate (events: LogEvent list) =
     events |> List.iter (fun e -> appendEvent dbPath gate logger (channelOf e) e)
 
-/// The CLI read path: derive init state from pre-window history, then compute over the window.
+/// The CLI read path: derive init state from pre-window history (continued from
+/// the retention seed), then compute over the window.
 let private computeViaCli dbPath (from: DateTimeOffset) (until: DateTimeOffset) =
     use ro = openReadContext dbPath
+    let seed = getFoldSeed ro
     let initState, initLocked, initReason =
         getEventsBefore ro from
-        |> foldState None false None None
+        |> foldState seed.State seed.Locked seed.Shadow seed.Reason
         |> (fun (st, lk, _, r) -> st, lk, r)
     let events = getEventsInRange ro from until
     computeWithTrace initState initLocked initReason until events |> fst
@@ -273,3 +276,110 @@ let ``host resolves the ingestion worker as IHostedService through the factory``
     let worker = host.Services.GetRequiredService<IngestionWorker>()
     let hosted = host.Services.GetRequiredService<IHostedService>()
     System.Object.ReferenceEquals(worker, hosted) |> should equal true
+// ── Retention: pruning keeps the fold exact ─────────────────────────────────
+
+/// Day-1 session, 12:00 user disconnect; reconnect 14:30 the same day — pause
+/// 2.5h < 3h, so the full history classifies the reconnect PostPause.
+let private retentionEvents =
+    let d1 = DateTimeOffset(2026, 1, 15, 0, 0, 0, TimeSpan.Zero)
+    [ rdp 1024 (d1.AddHours 9.0)
+      rdp 1027 (d1.AddHours 9.0 + TimeSpan.FromMinutes 1.0)
+      userDisc (d1.AddHours 12.0)
+      rdp 1024 (d1.AddHours 14.5)
+      rdp 1027 (d1.AddHours 14.5 + TimeSpan.FromMinutes 1.0)
+      userDisc (d1.AddHours 17.0) ]
+
+let private retentionHorizon = DateTimeOffset(2026, 1, 15, 13, 0, 0, TimeSpan.Zero)   // between 12:00 and 14:30
+
+[<Fact>]
+let ``prune cuts at the newest event at/before the horizon and records the seed`` () =
+    withTempDb <| fun dbPath ->
+        let gate = obj()
+        appendAll dbPath gate retentionEvents
+        pruneWith retentionHorizon dbPath gate logger
+
+        use ro = openReadContext dbPath
+        // everything at/before the 12:00 disconnect is gone; day-2 events survive
+        countEvents ro |> should equal 3
+        getAllEvents ro |> List.map (fun e -> e.Id) |> should equal [ 1024; 1027; 1026 ]
+
+        getRetentionStart ro |> should equal (Some (DateTimeOffset(2026, 1, 15, 12, 0, 0, TimeSpan.Zero)))
+
+        // the seed captured the machine state at the cutoff: the disconnect left an
+        // open Paused interval (user-initiated → Initial reason so far)
+        let seed = getFoldSeed ro
+        seed.State |> should equal (Some (Paused, DateTimeOffset(2026, 1, 15, 12, 0, 0, TimeSpan.Zero)))
+        seed.Locked |> should equal false
+        seed.Reason |> should equal (Some Initial)
+
+[<Fact>]
+let ``pruned db reproduces the unpruned db for post-cutoff windows`` () =
+    // The invariant that makes retention safe: for a window starting after the
+    // cutoff, the pruned DB's CLI read path yields identical stats to the
+    // unpruned DB's — including the PostPause classification of the first
+    // reconnect (a naive prune would restart from nothing, classify it Initial
+    // and charge the 5-minute fresh-connect grace).
+    withTempDb <| fun prunedDb ->
+        withTempDb <| fun fullDb ->
+            let gate = obj()
+            appendAll prunedDb gate retentionEvents
+            appendAll fullDb gate retentionEvents
+            pruneWith retentionHorizon prunedDb gate logger
+            derive fullDb gate logger |> ignore
+
+            let from   = DateTimeOffset(2026, 1, 15, 14, 0, 0, TimeSpan.Zero)
+            let until  = DateTimeOffset(2026, 1, 15, 18, 0, 0, TimeSpan.Zero)
+            computeViaCli prunedDb from until |> should equal (computeViaCli fullDb from until)
+
+            // and the derived Intervals keep the PostPause connect reason
+            intervalRows prunedDb
+            |> List.filter (fun (kind, _, _, _, _, _) -> kind = "Connecting")
+            |> List.map (fun (_, _, _, reason, _, _) -> reason)
+            |> should equal [ "PostPause" ]
+
+[<Fact>]
+let ``prune is idempotent and the append path drops pre-cutoff events`` () =
+    withTempDb <| fun dbPath ->
+        let gate = obj()
+        appendAll dbPath gate retentionEvents
+        pruneWith retentionHorizon dbPath gate logger
+        use ro = openReadContext dbPath
+        countEvents ro |> should equal 3
+
+        // second run: cutoff unchanged, nothing left to delete
+        pruneWith retentionHorizon dbPath gate logger
+        use ro2 = openReadContext dbPath
+        countEvents ro2 |> should equal 3
+
+        // a re-arrived PRE-cutoff event (backlog replay after an outage) is dropped
+        // by the append guard instead of folding backward on top of the seed
+        appendAll dbPath gate [ rdp 1027 (DateTimeOffset(2026, 1, 10, 10, 0, 0, TimeSpan.Zero)) ]
+        use ro3 = openReadContext dbPath
+        countEvents ro3 |> should equal 3
+
+        // …while an event between the cutoff and the horizon is stored, then pruned
+        appendAll dbPath gate [ rdp 1027 (DateTimeOffset(2026, 1, 15, 12, 30, 0, TimeSpan.Zero)) ]
+        use ro4 = openReadContext dbPath
+        countEvents ro4 |> should equal 4
+        pruneWith retentionHorizon dbPath gate logger
+        use ro5 = openReadContext dbPath
+        countEvents ro5 |> should equal 3
+        // the seed advanced to the new cutoff: the 12:30 connect happened while
+        // Paused → Active; the state (including its start) survives in the seed
+        getFoldSeed ro5
+        |> should equal { State = Some (Active, DateTimeOffset(2026, 1, 15, 12, 30, 0, TimeSpan.Zero))
+                          Locked = false; Shadow = None; Reason = Some Initial }
+
+[<Fact>]
+let ``prune preserves the snapshot of an open session`` () =
+    withTempDb <| fun prunedDb ->
+        withTempDb <| fun fullDb ->
+            let gate = obj()
+            appendAll prunedDb gate retentionEvents
+            appendAll fullDb gate retentionEvents
+            pruneWith retentionHorizon prunedDb gate logger
+            derive fullDb gate logger |> ignore
+
+            use roPruned = openReadContext prunedDb
+            use roFull   = openReadContext fullDb
+            loadSnapshot roPruned |> should equal (loadSnapshot roFull)
