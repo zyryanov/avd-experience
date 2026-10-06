@@ -77,7 +77,8 @@ let ``parseDateAt invalid inputs return Error`` (input: string) =
 
 // ── CLI parser: the service subcommand must be discoverable via --help ────────
 // Regression: 'service' was dispatched before the Argu parser, so --help never
-// mentioned the service control commands.
+// mentioned the service control commands. It is now a nested ParseResults
+// subcommand (like 'config'), so it is listed under SUBCOMMANDS in --help.
 
 let parser = ArgumentParser.Create<Program.Args>(programName = "avd-experience")
 
@@ -90,13 +91,21 @@ let ``usage lists the service subcommand and its verbs`` () =
 [<Fact>]
 let ``'service status' parses as the Service subcommand`` () =
     let args = parser.ParseCommandLine [| "service"; "status" |]
-    args.GetResult Program.Service |> should equal "status"
+    (args.GetResult Program.Service).Contains Program.ServiceArgs.Status |> should equal true
 
 [<Fact>]
 let ``service parsing is position-independent`` () =
     let args = parser.ParseCommandLine [| "-s"; "2026-05-01"; "service"; "install" |]
-    args.GetResult Program.Service |> should equal "install"
-    args.GetResult Program.Start |> should equal "2026-05-01"
+    (args.GetResult Program.Service).Contains Program.ServiceArgs.Install |> should equal true
+    // Program.Start is ambiguous now that ServiceArgs also has a Start case
+    args.GetResult Program.Args.Start |> should equal "2026-05-01"
+
+[<Fact>]
+let ``bare 'service' parses without a verb`` () =
+    let args = parser.ParseCommandLine [| "service" |]
+    let service = args.GetResult Program.Service
+    service.Contains Program.ServiceArgs.Status |> should equal false
+    service.Contains Program.ServiceArgs.Start |> should equal false
 
 // ── The config subcommand ────────────────────────────────────────────────────
 
@@ -122,7 +131,7 @@ let ``'config reset retention-days' parses`` () =
 let ``config parsing is position-independent`` () =
     let args = parser.ParseCommandLine [| "-s"; "2026-05-01"; "config"; "show" |]
     (args.GetResult Program.Config).Contains Program.ConfigArgs.Show |> should equal true
-    args.GetResult Program.Start |> should equal "2026-05-01"
+    args.GetResult Program.Args.Start |> should equal "2026-05-01"
 
 [<Fact>]
 let ``usage lists the config subcommand and its verbs`` () =

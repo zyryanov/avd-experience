@@ -260,7 +260,10 @@ MonitorWatcher.fs  — --monitor: ensures the service is running, waits for back
 CsvExport.fs       — writeEventsCsv / writeIntervalsCsv
 Report.fs          — Spectre table (printStats), trace log (printTrace), format helpers
 Program.fs         - arg parsing; `service <status|start|stop|install|uninstall>` verbs
-                     (elevation on demand); `config` / `config set|reset` settings
+                     (nested ServiceArgs subcommand, like `config`: listed under
+                     SUBCOMMANDS in --help, `service --help` details the verbs, bare
+                     `service` defaults to status; elevation on demand); `config` /
+                     `config set|reset` settings
                      verbs (write ServiceMeta from the CLI, no elevation; set confirms
                      when shrinking retention — destructive at the next prune); report
                      path reads DB, no elevation; warns when the window starts before
@@ -312,6 +315,7 @@ Windows Event Log channels relevant to AVD (all ingested by the service; the CLI
 ```
 avd-experience -s 2026-05-01 -t 2026-05-18 [--csv]   report from the local DB (no elevation)
 avd-experience --monitor                             live transitions from avd.db
+avd-experience service                               same as 'service status'
 avd-experience service status                        service state + DB record counts
 avd-experience service start|stop                    start/stop (stop elevates)
 avd-experience service install|uninstall             registers/deregisters (elevates)

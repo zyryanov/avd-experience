@@ -53,7 +53,7 @@ dotnet test AvdExperience.IntegrationTests
 | `--end` | `-t`, `--to` | today | End date, inclusive (same formats) |
 | `--monitor` | `-m` | — | Watch the database: poll `avd.db` for live AVD state changes, print each transition with timestamp and duration; Ctrl+C to stop |
 | `--csv` | `-c` | off | Export raw events and intervals to CSV files |
-| `service <verb>` | — | — | Manage the background service: `status` (no elevation), `start`, `stop`, `install`, `uninstall` (elevate as needed) |
+| `service <verb>` | — | — | Manage the background service: bare `service` or `service status` (no elevation), `start`, `stop`, `install`, `uninstall` (elevate as needed) |
 | `config <verb>` | — | — | Show or change settings stored in the database (no elevation): `config`, `config show`, `config set <key> <value>`, `config reset <key>` |
 
 ## What It Reports

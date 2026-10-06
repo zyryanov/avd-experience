@@ -25,14 +25,33 @@ type ConfigArgs =
             | Set _  -> "set <key> <value> (e.g. 'config set retention-days 30')"
             | Reset _ -> "reset <key> to the built-in default"
 
+// Nested subcommand so 'service' is listed under SUBCOMMANDS in --help next to
+// 'config' (a plain string case renders as an option, e.g. 'service <string>',
+// hiding the verbs), and 'avd-experience service --help' lists them in detail.
+type ServiceArgs =
+    | [<CliPrefix(CliPrefix.None)>] Status
+    | [<CliPrefix(CliPrefix.None)>] Start
+    | [<CliPrefix(CliPrefix.None)>] Stop
+    | [<CliPrefix(CliPrefix.None)>] Install
+    | [<CliPrefix(CliPrefix.None)>] Uninstall
+    interface IArgParserTemplate with
+        member x.Usage =
+            match x with
+            | Status    -> "show service state and DB record counts"
+            | Start     -> "start the service (elevates on demand)"
+            | Stop      -> "stop the service (elevates)"
+            | Install   -> "install and start the service (elevates)"
+            | Uninstall -> "uninstall the service (elevates)"
+
 type Args =
     | [<AltCommandLine("-s", "--from")>] Start of string
     | [<AltCommandLine("-t", "--to")>]   End of string
     | [<AltCommandLine("-m")>] Monitor
     | [<AltCommandLine("-c")>] Csv
-    // CliPrefix.None makes this a bare subcommand ('service status'), so it shows
-    // up in --help next to the flags and is parsed position-independently.
-    | [<CliPrefix(CliPrefix.None); Unique>] Service of string
+    // CliPrefix.None on a ParseResults case makes this a true subcommand
+    // ('service status'), listed under SUBCOMMANDS in --help and parsed
+    // position-independently.
+    | [<CliPrefix(CliPrefix.None); Unique>] Service of ParseResults<ServiceArgs>
     | [<CliPrefix(CliPrefix.None); Unique>] Config of ParseResults<ConfigArgs>
     interface IArgParserTemplate with
         member x.Usage =
@@ -291,7 +310,18 @@ let private runParsed (argv: string[]) =
                 Error 1
     match parsed with
     | Error code -> code
-    | Ok args when args.Contains Service -> runServiceCommand (args.GetResult Service)
+    | Ok args when args.Contains Service ->
+        // Map the parsed verb back onto the string dispatch below. Bare 'service'
+        // (no verb) shows status, mirroring bare 'config' showing the settings.
+        let service = args.GetResult Service
+        let verb =
+            if service.Contains ServiceArgs.Status then "status"
+            elif service.Contains ServiceArgs.Start then "start"
+            elif service.Contains ServiceArgs.Stop then "stop"
+            elif service.Contains ServiceArgs.Install then "install"
+            elif service.Contains ServiceArgs.Uninstall then "uninstall"
+            else "status"
+        runServiceCommand verb
     | Ok args when args.Contains Config  -> runConfig (args.GetResult Config)
     | Ok args when args.Contains Monitor -> AvdStats.MonitorWatcher.run ()
     | Ok args ->
