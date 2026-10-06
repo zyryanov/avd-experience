@@ -5,6 +5,11 @@ open System.IO
 open AvdStats.EventLog
 
 /// Fresh temp SQLite DB per test (unique path avoids connection-pool file locks).
+/// The finally clears pools process-globally so the pooled native handles are
+/// released before the files are deleted. ClearAllPools can dispose the sqlite3
+/// handle of a connection that is still leased and mid-command on another thread,
+/// so this fixture must never run concurrently with other DB tests — the assembly
+/// disables xUnit test parallelization (AssemblyInfo.fs).
 let withTempDb (f: string -> unit) =
     let dbPath = Path.Combine(Path.GetTempPath(), "avd-dbtest-" + Guid.NewGuid().ToString("N") + ".db")
     try

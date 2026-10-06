@@ -185,7 +185,13 @@ Five projects in `AvdExperience.slnx`:
 - Fake sources must filter events by channel (`channelOf`), matching real per-channel
   logs; a shared source returning all events cross-contaminates watermark replays.
 - Each test gets a unique temp DB via `Fixtures.withTempDb` (unique path avoids
-  connection-pool file locks; pools cleared before deletion).
+  connection-pool file locks; pools cleared before deletion). The integration-test
+  assembly disables xUnit test parallelization (AssemblyInfo.fs): teardown calls the
+  process-global `SqliteConnection.ClearAllPools()`, which can dispose the native
+  sqlite3 handle of a connection still leased and mid-command on another thread —
+  with collections running in parallel, one class's teardown raced another class's
+  in-flight `initDatabase`/`derive` connections and failed CI with
+  `ObjectDisposedException('SQLitePCL.sqlite3')`.
 - NOT automated (manual/ops only): UAC elevation, sc.exe install/uninstall, real
   service lifecycle, interactive `--monitor` with live session activity.
 
