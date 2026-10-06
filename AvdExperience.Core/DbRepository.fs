@@ -351,7 +351,7 @@ let getRetentionStart (ctx: QueryContext) : DateTimeOffset option =
 /// Seed storage format: `Kind@ISO|locked|Kind@ISO|Reason`, empty segment for an
 /// absent component — deliberately hand-rolled instead of System.Text.Json so the
 /// trimmed CLI (which reads the seed in deriveStateAt) gets no new
-/// reflection-dependent type (see CLAUDE.md's trimmer guards).
+/// reflection-dependent type (see AGENTS.md's trimmer guards).
 let seedToJson (seed: FoldSeed) : string =
     let part = function
         | Some (k, t) -> sprintf "%s@%s" (intervalKindToString k) (formatIso t)
