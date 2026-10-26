@@ -138,10 +138,17 @@ Five projects in `AvdExperience.slnx`:
   folder" upgrades, and the service's frozen command line rules out arguments.
   `Retention.prune` reads `RetentionDays` at prune time and the worker prunes on
   the tick when the value changes, so a shrink applies within seconds without a
-  restart. `getRetentionDays` falls back to the built-in default when the stored
+  restart (the worker caches the value *before* the warmup prune so a change made
+  during warmup is still caught by the first tick, not deferred to the next UTC
+  day). `getRetentionDays` falls back to the built-in default when the stored
   value is invalid (the CLI `config show` surfaces the raw override instead of
-  masking it). Shortening is destructive — the CLI confirms — while lengthening
+  masking it). Shortening is destructive — the CLI confirms, naming the service's
+  real cutoff (the newest event at/before the new horizon, not the horizon) and
+  when the prune runs (next tick when the service is up, next start when it is
+  not); a shrink that would delete nothing is applied without a prompt. Lengthening
   resurrects nothing: `RetentionStart` stays where the last prune actually reached.
+  `config reset` deletes the override rather than storing the default value, so the
+  setting keeps following the built-in default.
 - Warmup → live handover: `EventLogWatcher` (no bookmark) only raises events logged
   after activation, so subscriptions are enabled *before* the backlog replay and
   buffered (`LiveEventBuffer`); buffered events are drained after the replay and the

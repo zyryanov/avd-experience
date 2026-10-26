@@ -57,6 +57,15 @@ type IngestionWorker(logger: ILogger<IngestionWorker>, dbPath: string) =
         // Retention before the first derive: prune the raw events older than the
         // horizon (seeding the retained fold with the exact state at the cutoff)
         // so the first derive below folds the post-prune event set.
+        //
+        // Cache the value here, *before* the prune consumes it: reading it after the
+        // warmup (which can spend seconds replaying and deriving) would make a
+        // setting changed in the meantime look unchanged to the tick below, which
+        // would then defer the shrink until the next UTC day.
+        let readRetentionDays () =
+            use ro = openReadContext dbPath
+            getRetentionDays ro
+        let mutable lastRetentionDays = readRetentionDays ()
         Retention.prune dbPath gate logger
 
         // The derivation cursor must come from the same snapshot derive folded:
@@ -73,9 +82,6 @@ type IngestionWorker(logger: ILogger<IngestionWorker>, dbPath: string) =
         // Cheap when idle — one max(RecordId) + retention read per tick.
         use timer = new PeriodicTimer(TimeSpan.FromSeconds 2.0)
         let mutable lastRetentionDay = DateOnly.FromDateTime DateTime.UtcNow.Date
-        let mutable lastRetentionDays =
-            use ro = openReadContext dbPath
-            getRetentionDays ro
         try
             while true do
                 let! _ = timer.WaitForNextTickAsync(ct)

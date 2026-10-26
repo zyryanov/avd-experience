@@ -243,6 +243,57 @@ let private showConfig () : int =
         AnsiConsole.MarkupLine(sprintf "[dim]Backfill horizon:[/] %s (no events before this were ingested)" (horizon backfillStart))
         0
 
+/// When the service acts on a new retention-days value: the derive tick re-reads it
+/// every 2s and prunes as soon as it differs, so a change made while the service
+/// runs lands within seconds; a stopped service applies it at the warmup prune on
+/// its next start (before the first derive).
+let private pruneTiming () : string =
+    match getStatus () with
+    | Running | StartPending -> "within a few seconds (the running service prunes on its next tick)"
+    | NotInstalled -> "the next time the service is installed and started"
+    | _ -> "the next time the service starts"
+
+/// Write the retention-days override and say exactly when — and whether — the
+/// service acts on it. Shared by `config set` and `config reset`, which differ only
+/// in the verb of the success line and in the write itself (`set` stores an
+/// override, `reset` deletes it so the built-in default applies again).
+let private writeRetentionDays (label: string) (write: unit -> unit) (currentDays: float) (newDays: float) : int =
+    let writeWith (note: string) =
+        write ()
+        AnsiConsole.MarkupLine(sprintf "[green]✓ retention-days %s[/] %g [grey]— %s.[/]" label newDays note)
+        0
+    if newDays = currentDays then
+        AnsiConsole.MarkupLine(sprintf "[grey]retention-days is already %g — no change.[/]" newDays)
+        0
+    elif newDays > currentDays then
+        // Lengthening is a no-op for existing data: RetentionStart stays where the
+        // last prune actually reached, so nothing comes back.
+        writeWith (sprintf "future prunes keep %g days; events already pruned are not restored" newDays)
+    else
+        // Preview the service's own cutoff — the newest event at/before the new
+        // horizon, not the horizon itself — so the prompt names the events that are
+        // really at risk, and a shrink that deletes nothing asks no confirmation.
+        let horizon = DateTimeOffset.UtcNow.AddDays -newDays
+        match tryRead defaultDbPath (fun ctx -> getLatestTimeAtOrBefore ctx horizon) with
+        | Error msg -> reportDbReadError defaultDbPath msg; 1
+        | Ok None ->
+            writeWith (sprintf "no stored events are older than %g days yet, so nothing is deleted" newDays)
+        | Ok (Some cutoff) ->
+            let cutoffText = cutoff.LocalDateTime.ToString "yyyy-MM-dd HH:mm"
+            let timing = pruneTiming ()
+            AnsiConsole.MarkupLine(sprintf "[yellow]⚠ Retention shrinks from %g to %g days: events up to[/] %s [yellow]will be permanently deleted[/] %s."
+                currentDays newDays cutoffText timing)
+            if not (AnsiConsole.Confirm "Continue?") then
+                AnsiConsole.MarkupLine "[yellow]Cancelled[/] — no changes made."
+                1
+            else
+                write ()
+                // The prompt above already said *when*; the success line only says
+                // how to watch it happen, so the timing is not repeated.
+                AnsiConsole.MarkupLine(sprintf "[green]✓ retention-days %s[/] %g [grey]— 'config show' reports 'Pruned through:[/] %s[grey]' once that prune has run.[/]"
+                    label newDays cutoffText)
+                0
+
 let private setConfig (key: string) (value: string) : int =
     match key with
     | "retention-days" ->
@@ -254,36 +305,26 @@ let private setConfig (key: string) (value: string) : int =
             match tryRead defaultDbPath getRetentionDays with
             | Error msg -> reportDbReadError defaultDbPath msg; 1
             | Ok currentDays ->
-                // Shrinking is destructive: the next prune (within a tick of the
-                // running service) permanently deletes everything below the new
-                // horizon. Lengthening is a no-op for existing data — nothing is
-                // resurrected — so it applies without confirmation.
-                if newDays < currentDays then
-                    let willPruneThrough = DateTimeOffset.UtcNow.AddDays -newDays
-                    if not (AnsiConsole.Confirm(
-                        sprintf "Retention shrinks from %g to %g days: events before %s will be permanently deleted at the next prune. Continue?"
-                            currentDays newDays (willPruneThrough.LocalDateTime.ToString "yyyy-MM-dd HH:mm"))) then
-                        AnsiConsole.MarkupLine "[yellow]Cancelled[/] — no changes made."
-                        1
-                    else
+                writeRetentionDays "set to"
+                    (fun () ->
                         use ctx = openContext defaultDbPath
-                        setRetentionDays ctx newDays
-                        AnsiConsole.MarkupLine(sprintf "[green]✓ retention-days set to[/] %g [grey](applies at the next prune)[/]" newDays)
-                        0
-                else
-                    use ctx = openContext defaultDbPath
-                    setRetentionDays ctx newDays
-                    AnsiConsole.MarkupLine(sprintf "[green]✓ retention-days set to[/] %g [grey](applies at the next prune)[/]" newDays)
-                    0
+                        setRetentionDays ctx newDays)
+                    currentDays newDays
     | k -> unknownKey k
 
 let private resetConfig (key: string) : int =
     match key with
     | "retention-days" ->
-        use ctx = openContext defaultDbPath
-        resetRetentionDays ctx
-        AnsiConsole.MarkupLine(sprintf "[green]✓ retention-days reset to the default %g.[/]" retentionDays)
-        0
+        match tryRead defaultDbPath getRetentionDays with
+        | Error msg -> reportDbReadError defaultDbPath msg; 1
+        | Ok currentDays ->
+            // Reset *deletes* the override instead of storing the default value, so
+            // the setting keeps following the built-in default.
+            writeRetentionDays "reset to the default"
+                (fun () ->
+                    use ctx = openContext defaultDbPath
+                    resetRetentionDays ctx)
+                currentDays retentionDays
     | k -> unknownKey k
 
 let private runConfig (config: ParseResults<ConfigArgs>) : int =
