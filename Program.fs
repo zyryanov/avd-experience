@@ -235,7 +235,9 @@ let private showConfig () : int =
             | Some raw when tryParseRetentionDays raw |> Option.isSome -> sprintf "set to %s" raw
             | Some raw -> sprintf "set to '%s' — invalid, using default" raw
             | None -> "default"
-        AnsiConsole.MarkupLine(sprintf "retention-days: %g [grey][%s][/]" days (Markup.Escape source))
+        // Literal brackets must be doubled, otherwise Spectre reads the source
+        // text as a markup tag and fails with an unbalanced markup stack.
+        AnsiConsole.MarkupLine(sprintf "retention-days: %g [grey][[%s]][/]" days (Markup.Escape source))
         let horizon = Option.map (fun (h: DateTimeOffset) -> h.LocalDateTime.ToString "yyyy-MM-dd HH:mm") >> Option.defaultValue "—"
         AnsiConsole.MarkupLine(sprintf "[dim]Pruned through:[/] %s (events before this are deleted)" (horizon retentionStart))
         AnsiConsole.MarkupLine(sprintf "[dim]Backfill horizon:[/] %s (no events before this were ingested)" (horizon backfillStart))

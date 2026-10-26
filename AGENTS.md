@@ -264,7 +264,9 @@ MonitorWatcher.fs  — --monitor: ensures the service is running, waits for back
                      order; full re-derivation when a batch arrives out of canonical
                      order), prints transitions; Ctrl+C to stop
 CsvExport.fs       — writeEventsCsv / writeIntervalsCsv
-Report.fs          — Spectre table (printStats), trace log (printTrace), format helpers
+Report.fs          — Spectre table (printStats) with weekend rows dimmed via dayRow
+                     (only the issue cells stay at full emphasis), trace log
+                     (printTrace), format helpers
 Program.fs         - arg parsing; `service <status|start|stop|install|uninstall>` verbs
                      (nested ServiceArgs subcommand, like `config`: listed under
                      SUBCOMMANDS in --help, `service --help` details the verbs, bare

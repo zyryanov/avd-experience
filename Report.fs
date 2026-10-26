@@ -44,11 +44,33 @@ let printTrace (traces: EventTrace list) =
         AnsiConsole.MarkupLine(sprintf "[grey]%s[/] [dim]#%-4d[/]  %s [grey]→[/] %s%s%s"
             ts t.Event.Id (stateMarkup t.StateBefore) (stateMarkup t.StateAfter) durStr reportStr))
 
+/// Saturday or Sunday — the days the report de-emphasises.
+let isWeekend (date: DateOnly) =
+    date.DayOfWeek = DayOfWeek.Saturday || date.DayOfWeek = DayOfWeek.Sunday
+
+/// Cells of one day row. Weekend rows are dimmed so work days stand out; only the
+/// issue cells keep their full emphasis, so a genuine weekend incident is not muted.
+let dayRow (d: DayStats) : string list =
+    let hasIssues = d.IssueCount > 0
+    let dim (markup: string) = if isWeekend d.Date then sprintf "[dim]%s[/]" markup else markup
+
+    let issueCell  = if hasIssues then sprintf "[red]%s[/]"      (fmtTime d.IssueTime) else dim (sprintf "[dim]%s[/]" (fmtTime d.IssueTime))
+    let countCell  = if hasIssues then sprintf "[red bold]%d[/]" d.IssueCount          else dim (sprintf "[dim]%d[/]" d.IssueCount)
+    let reportCell = dim (sprintf "[magenta]%s[/]" (fmtTime d.ReportTime))
+
+    [ dim (sprintf "%s %s" (d.Date.ToString("yyyy-MM-dd")) (d.Date.ToString("ddd")))
+      dim (sprintf "[green]%s[/]"      (fmtTime d.ActiveTime))
+      dim (sprintf "[yellow]%s[/]"     (fmtTime d.ConnectingTime))
+      dim (sprintf "[steelblue1]%s[/]" (fmtTime d.PausedTime))
+      issueCell
+      countCell
+      reportCell ]
+
 let printStats (stats: PeriodStats) =
     let table = Table()
     table.Border <- TableBorder.Rounded
 
-    table.AddColumn(TableColumn("[bold white]Date[/]").LeftAligned())         |> ignore
+    table.AddColumn(TableColumn("[bold white]Date[/]").LeftAligned().NoWrap()) |> ignore
     table.AddColumn(TableColumn("[green bold]Active[/]").RightAligned())      |> ignore
     table.AddColumn(TableColumn("[yellow bold]Connecting[/]").RightAligned()) |> ignore
     table.AddColumn(TableColumn("[steelblue1 bold]Paused[/]").RightAligned()) |> ignore
@@ -57,18 +79,7 @@ let printStats (stats: PeriodStats) =
     table.AddColumn(TableColumn("[magenta bold]Report[/]").RightAligned())    |> ignore
 
     for d in stats.ByDay do
-        let hasIssues = d.IssueCount > 0
-        let issueTime  = if hasIssues then sprintf "[red]%s[/]"      (fmtTime d.IssueTime) else sprintf "[dim]%s[/]"  (fmtTime d.IssueTime)
-        let issueCount = if hasIssues then sprintf "[red bold]%d[/]" d.IssueCount          else sprintf "[dim]%d[/]" d.IssueCount
-        table.AddRow(
-            d.Date.ToString("yyyy-MM-dd"),
-            sprintf "[green]%s[/]"      (fmtTime d.ActiveTime),
-            sprintf "[yellow]%s[/]"     (fmtTime d.ConnectingTime),
-            sprintf "[steelblue1]%s[/]" (fmtTime d.PausedTime),
-            issueTime,
-            issueCount,
-            sprintf "[magenta]%s[/]"    (fmtTime d.ReportTime)
-        ) |> ignore
+        table.AddRow(List.toArray (dayRow d)) |> ignore
 
     if stats.ByDay.Length > 1 then
         let dayCount = if stats.ByDay.Length = 1 then "1 day" else sprintf "%d days" stats.ByDay.Length
